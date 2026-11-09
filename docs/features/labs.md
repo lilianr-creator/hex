@@ -100,6 +100,9 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        with Summaries on OpenCode, notes follow meetings.notes_format: Short,
 │                                        Standard (key points, decisions), or Detailed (also next steps and open
 │                                        questions); Summary style nests under Model
+├── Meet participant names no labs.meet_participants      (macOS)   the Hex Meet Participants Chrome extension
+│                                        reports who speaks in Google Meet to /meeting/presence; transcripts,
+│                                        notes, Markdown, and MCP name people instead of Them
 ├── Expire meeting audio separately no labs.expire_meeting_audio (every OS with Meetings)
 │                                        Meetings › Settings adds Keep audio under Keep meetings: finished meetings drop
 │                                        their WAVs on their own schedule (at or beyond Keep meetings it has no effect),
@@ -1542,6 +1545,19 @@ in [tests/panes.rs](../../src/rune_ui/tests/panes.rs);
 [control/settings.rs](../../src/control/settings.rs). Not yet observed: a real
 pass moving WAVs to a real Trash. The Labs page goldens (`mac-labs`,
 `windows-labs`, `linux-labs`) show the new card.
+
+Meet participant names (`meet-participants`, macOS): the Hex Meet
+Participants extension (`extensions/gmeet-presence`, unpacked, DOM only)
+reports who speaks in Google Meet; Hex names each sentence of the final
+transcript by overlap with the reported intervals, and the Markdown, notes
+prompt, search passages, MCP, subtitles, and the pane show the names. Read
+where `/meeting/presence` answers (404 while off), where a recording
+registers for reports, and where Meetings › Settings shows the Chrome
+extension row. The native messaging host and its installer
+(`scripts/install-presence-host.sh`) are macOS only. Details in
+[meetings.md](meetings.md#participant-names). Checks:
+`meet_participants_is_its_own_bit_and_off_by_default` and the speaker tests
+listed there.
 
 Detailed meeting notes (`detailed-meeting-notes`, every OS with Meetings):
 with Summaries on OpenCode, Summary style nests under Model and

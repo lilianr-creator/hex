@@ -67,6 +67,9 @@ pub(super) struct Capabilities {
     /// Labs › Transform typed text: run Output steps on text already typed in
     /// the focused field and replace it (Linux).
     pub(super) typed_text: bool,
+    /// The Google Meet extension's row under Meetings: its native host and
+    /// installer exist for macOS only.
+    pub(super) meet_extension: bool,
 }
 
 impl Capabilities {
@@ -86,6 +89,7 @@ impl Capabilities {
         modifier_sides: false,
         keyboard_model_switching: true,
         typed_text: true,
+        meet_extension: false,
     };
 
     pub(super) const MACOS: Self = Self {
@@ -104,6 +108,7 @@ impl Capabilities {
         modifier_sides: true,
         keyboard_model_switching: true,
         typed_text: false,
+        meet_extension: true,
     };
 
     pub(super) const WINDOWS: Self = Self {
@@ -122,6 +127,7 @@ impl Capabilities {
         modifier_sides: true,
         keyboard_model_switching: true,
         typed_text: false,
+        meet_extension: false,
     };
 
     /// This OS's capabilities, with the rows its window host decides.
@@ -840,6 +846,13 @@ impl Difference {
 #[cfg(test)]
 const DIFFERENCES: &[(&str, Difference)] = &[
     (
+        "meet_extension",
+        Difference::Pending(
+            "the Meet extension's native host and installer know only macOS's \
+             NativeMessagingHosts folders",
+        ),
+    ),
+    (
         "calendar",
         Difference::OsPattern("EventKit; there is no cross-platform calendar source"),
     ),
@@ -889,7 +902,7 @@ const DIFFERENCES: &[(&str, Difference)] = &[
 impl Capabilities {
     /// Every capability by name. Destructuring makes a new capability a
     /// compile error here until it is named.
-    pub(super) fn fields(self) -> [(&'static str, bool); 14] {
+    pub(super) fn fields(self) -> [(&'static str, bool); 15] {
         let Self {
             os: _,
             meetings,
@@ -906,6 +919,7 @@ impl Capabilities {
             modifier_sides,
             keyboard_model_switching,
             typed_text,
+            meet_extension,
         } = self;
         [
             ("meetings", meetings),
@@ -922,6 +936,7 @@ impl Capabilities {
             ("modifier_sides", modifier_sides),
             ("keyboard_model_switching", keyboard_model_switching),
             ("typed_text", typed_text),
+            ("meet_extension", meet_extension),
         ]
     }
 }

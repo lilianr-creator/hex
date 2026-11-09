@@ -1224,6 +1224,14 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Short: two sentences. Standard: key points and decisions. Detailed: next steps and open questions", "Кратко: два предложения. Стандартно: ключевые моменты и решения. Подробно: следующие шаги и открытые вопросы"),
     ("Detailed meeting notes", "Подробные заметки встреч"),
     ("OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose", "OpenCode записывает ключевые моменты, решения, следующие шаги и открытые вопросы в выбранном стиле резюме"),
+    ("Chrome extension", "Расширение Chrome"),
+    ("Connected", "Подключено"),
+    ("Not connected", "Не подключено"),
+    ("Reads who is speaking in Google Meet", "Определяет, кто говорит в Google Meet"),
+    ("Install the native host, then press Pair with Hex in the extension", "Установите нативный хост, затем нажмите Pair with Hex в расширении"),
+    ("{} extensions connected", "Подключено расширений: {}"),
+    ("Meet participant names", "Имена участников Meet"),
+    ("A Chrome extension tells Hex who speaks in Google Meet, so transcripts and notes name people instead of Them", "Расширение Chrome сообщает Hex, кто говорит в Google Meet, поэтому расшифровки и заметки показывают имена вместо «Собеседники»"),
 ];
 
 #[cfg(test)]

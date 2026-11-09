@@ -997,6 +997,124 @@ Final transcript            after flush            181 ms after Stop, 3.7% WER
 Dictation latency stays within run-to-run spread (earlier Parakeet-only runs
 measured p50 87-92 ms, p95 103-104 ms).
 
+### Participant Names
+
+```ts
+Labs › Meet participant names (macOS, off by default)   // labs.meet_participants
+├── Off -> GET/POST /meeting/presence answer 404, recordings register for
+│   no reports, and the Chrome extension row is hidden
+├── `hex meetings presence` prints the extension setup:
+│   endpoint=http://127.0.0.1:<port>   token=hex_…
+
+Browser extension (extensions/gmeet-presence, Chrome/Chromium)  // not shipped yet
+├── Content script on meet.google.com: reads [data-participant-id] tiles
+│   ├── Name from span.notranslate
+│   ├── Self: [data-self-name] on or in a tile, else the tile whose camera is
+│   │   mirrored and local (it has a group device id; a received track has
+│   │   none), else the one tile, if exactly one, named like Meet's
+│   │   data-self-name. A lone tile is never assumed to be you (Hide self
+│   │   view). That tile's events are never remote speakers.
+│   ├── Speaking = Meet's glow class (known list only, nothing auto-learned);
+│   │   an interval ends after 600 ms dark, so the glow dimming between
+│   │   words does not split a sentence
+│   ├── Batches {code, selfName, participants, events[]} every 2 s; open
+│   │   intervals are sent when the tab closes or reporting stops; a batch
+│   │   that cannot reach Hex is kept (2,000 intervals) and resent
+│   └── The current call's status (names) lives in chrome.storage.session,
+│       in memory only
+├── Background worker -> POST <endpoint>/meeting/presence with the token,
+│   and GET the same path every 30 s to check in even with no meeting; only
+│   an http://127.0.0.1:<port> endpoint is used; a 401 pairs again, and an
+│   unreachable endpoint pairs again at most every 5 minutes (Hex moved port)
+├── Native host `hex presence-host` (scripts/install-presence-host.sh):
+│   Chrome native messaging answers the endpoint and token, so the popup
+│   pairs with one click; the fields stay as a manual fallback
+├── One client id per install: two Chrome profiles are two connections
+├── Every report carries the Meet code from the URL (`abc-defg-hij`). The
+│   recording takes its code from the detected Meet's address (or its tab
+│   title) or the calendar event's Meet link; a recording started by hand
+│   takes the first code a report with people in it names. Then another
+│   Meet's reports, and reports without a code, get 409
+│   `presence-other-meeting`
+└── Popup: endpoint, token, on/off, Pair with Hex, Test connection, Hex and
+    Meet state; the toolbar icon is slate when off, blue with a dot on a Meet
+    page, green with the participant count in a call, and red REC while Hex
+    records that Meet (never on a 409)
+
+Hex side
+├── `speakers::register` at record start; reports append to speakers.ndjson
+│   (owner-only) beside the transcript, so a meeting Hex quit keeps its names
+├── POST /meeting/presence: presence token only (not the local API's), 409
+│   when no meeting records, 400 on a malformed report, 503
+│   `presence-unavailable` when the report cannot be saved; the file is
+│   written outside the recording's lock
+├── Bounds: 256 KiB per report, 4,096 intervals and 256 names per report,
+│   50,000 intervals per meeting (a warning in the log when reached); a
+│   name's intervals less than 400 ms apart merge into one turn
+├── GET /meeting/presence?client=<id>: 200 {connected, recording, extensions,
+│   meetingId?, meetingCode?, participants, events}; a check-in counts for 90 s
+├── Meetings › Settings › Chrome extension (macOS; the native host and its
+│   installer are macOS only, `platform::DIFFERENCES` "meet_extension"):
+│   Connected / Not connected, with the extension count when several
+│   profiles are paired; not connected says to install the native host and
+│   press Pair with Hex
+├── At final transcription, each sentence is matched by overlap against the
+│   reported intervals (aligned on the first audio packet of the meeting)
+│   ├── One name covers >= 60% -> that name
+│   ├── Less, but several names cover >= 20% each -> "Alice + Bob"
+│   └── No clear voice -> Them (never a guess)
+├── Microphone turns take selfName, else You
+└── manifest.participants / self_name; turns coalesce per speaker
+
+Surfaces: Markdown ("Participants" line, **Alice** turns), transcript.ndjson
+(`speaker`), notes prompt (names in every line, owners can be named), search
+passages, `hex meetings list` and MCP `list_meetings` (participants), subtitles,
+Meetings pane. A name is whatever the participant typed in Meet: Markdown
+escapes its markup (`<!--`, `[x](…)`, `**`), and subtitles keep it from ending
+a cue or the VTT voice tag. Search does not index names, and `--speaker`
+takes you or them only.
+```
+
+The endpoint's port is remembered between launches (`local-api-port`) and the
+token (`presence-token`) is created once beside `local-api.json`, so the
+extension is configured once. No report means no change: `You` / `Them`
+everywhere, as before.
+
+Checks in `meeting::speakers::tests`: `a_single_clear_voice_names_the_sentence`,
+`a_brief_overlap_belongs_to_the_voice_that_covers_the_sentence`,
+`two_voices_sharing_a_sentence_are_joined`,
+`no_clear_voice_leaves_the_sentence_unnamed`,
+`overlapping_events_for_one_name_are_not_double_counted`,
+`events_are_aligned_to_the_transcript_timeline`,
+`reports_are_cleaned_before_they_are_stored`,
+`a_report_without_meeting_is_refused`,
+`a_report_is_stored_once_and_read_back_from_the_meeting_folder`,
+`a_token_is_stable_and_survives_a_reread`,
+`two_extension_profiles_count_as_two_connections`,
+`a_client_that_stops_checking_in_does_not_count`,
+`touching_distinct_clients_keeps_both`,
+`a_meet_address_or_tab_title_names_its_meet`,
+`a_report_from_another_meet_is_refused`,
+`a_recording_without_a_code_takes_the_first_meet_with_people`,
+`a_report_that_cannot_be_saved_is_a_storage_error`, and
+`a_flickering_glow_is_one_turn_and_reports_are_bounded`, with the code
+carried from detection in `cleans_google_meet_titles_and_ignores_raw_meet_codes`; the native host framing in
+`local_api::presence_host::tests` (`framed_messages_round_trip`,
+`an_oversized_length_is_refused`). Also
+`turns_split_when_the_reported_speaker_changes` and
+`older_manifests_read_without_participants` (`meeting::tests`),
+`markdown_names_reported_participants`,
+`markdown_escapes_names_a_participant_chose`, and the metadata checks
+(`meeting::transcript::tests`), `transcript_lines_carry_participant_names`
+(`meeting::notes::tests`), `a_hostile_speaker_name_cannot_break_a_cue`
+(`control::transcript_cli`), and `presence_reports_take_the_extension_token_only`
+(also the GET check-in and its extension count),
+`a_published_api_reuses_its_port_across_restarts`, and
+`a_taken_preferred_port_falls_back_to_an_ephemeral_one` (`local_api::tests`).
+The extension itself has no automated checks: it is load-unpacked and exercised
+against a live Meet with the checklist in its README (two people, Hide self
+view, two people with one name, two Chrome profiles, Hex restarted).
+
 ### Echo Suppression
 
 ```ts
@@ -1323,7 +1441,8 @@ Final publication complete                               // meetings.notes
      │   "Names and terms that may appear: …" (≤30 vocabulary terms, read at
      │   each generation, Regenerate included) ahead of the calendar context;
      │   its length comes out of the budget. Off -> prompt unchanged
-     ├── Lines "[mm:ss] You|Them: text" (long turns split at 600 chars)
+     ├── Lines "[mm:ss] <speaker>: text", the speaker You, Them, Speaker
+     │   (imported), or a participant name (long turns split at 600 chars)
      ├── Whole transcript when it fits; otherwise opening 30 %, up to six
      │   evenly spaced middle passages, ending 20 %, "[…]" between them
      ├── Budget = min(cap, (context − 1,000 tokens) × 3 chars); the cap is
@@ -1338,8 +1457,8 @@ Final publication complete                               // meetings.notes
      ├── Short -> title ≤8 words, summary ≤2 sentences (as with the lab off)
      ├── Standard -> summary of 3–5 paragraphs, key_points, decisions
      └── Detailed -> summary of 3–6 paragraphs, key_points, decisions,
-         action_items [{ owner, task, due, at, quote }] (owner You only when
-         stated), open_questions
+         action_items [{ owner, task, due, at, quote }] (owner only when
+         stated: a participant's name, or You), open_questions
   -> Apple Intelligence always writes Short notes, whatever the Summary style:
      its schema holds a title and at most two sentences
   -> Answers are read leniently: null lists read as empty, a numeric `at` as

@@ -554,18 +554,21 @@ fn subtitles_render_speaker_turns_as_srt_and_vtt_cues() {
             start_ms: 5_500,
             end_ms: 8_000,
             text: "Hello <there> & welcome.".into(),
+            speaker: None,
         },
         TranscriptEntry {
             source: MeetingSource::System,
             start_ms: 3_725_042,
             end_ms: 3_725_000,
             text: "First line\n\n  \nsecond --> line".into(),
+            speaker: None,
         },
         TranscriptEntry {
             source: MeetingSource::System,
             start_ms: 3_800_000,
             end_ms: 3_801_000,
             text: " \n ".into(),
+            speaker: None,
         },
     ];
     assert_eq!(
@@ -580,6 +583,23 @@ fn subtitles_render_speaker_turns_as_srt_and_vtt_cues() {
          01:02:05.042 --> 01:02:05.042\n<v Them>First line\nsecond -&gt; line\n\n"
     );
     assert_eq!(subtitle_time(360_000_000, ','), "100:00:00,000");
+}
+
+#[test]
+fn a_hostile_speaker_name_cannot_break_a_cue() {
+    use crate::meeting::{MeetingSource, TranscriptEntry};
+    let entries = [TranscriptEntry {
+        source: MeetingSource::System,
+        start_ms: 0,
+        end_ms: 1_000,
+        text: "Hi.".into(),
+        speaker: Some("Eve> --> 99:00".into()),
+    }];
+    assert_eq!(
+        render_subtitles(&entries, SubtitleFormat::Vtt),
+        "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n<v Eve&gt; -&gt; 99:00>Hi.\n\n"
+    );
+    assert!(render_subtitles(&entries, SubtitleFormat::Srt).contains("\nEve> -> 99:00: Hi.\n"));
 }
 
 #[test]

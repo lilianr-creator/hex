@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Hex Meet Participants",
+  "version": "0.1.1",
+  "description": "Names who speaks in Google Meet for Hex meeting transcripts.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "speakers.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/hex-off-16.png",
+      "32": "icons/hex-off-32.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "Hex Meet Participants"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuSOt9tXQ+Cfzg7Oni1KurFPklywZ+ykWXiPClEzh+jnmo3mZbEEhhwOlmAkoN8v1pTrWzs/IApEmm0J9+2MR458pVmuILMG1w45P7zhYT/0G9OXkvLAxirb9yJ4Jy9MJzG5HJXtY3KfZ/U629Y6jbmYM79xS3+52OLX8bGyVJqvCvEplJwl06svC8RvEFqtQ5LELiR+SSdx8WPdV4KnEEK41MbiuAIp2wVm7ifJe0N5TpdvHoqgiB9jQzOhSQR1T++heBw2OUB0Rf05gAINq9HadAFlZ7APshgTBZHBeCfLrj9P5nx2ot5C//USHGmc3gm1kXpmin3+VrYQquqRxowIDAQAB",
+  "icons": {
+    "128": "icons/hex-on-128.png"
+  }
+}

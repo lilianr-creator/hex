@@ -147,6 +147,7 @@ fn transcript_entries_coalesce_into_source_turns_without_hiding_long_pauses() {
         start_ms,
         end_ms,
         text: text.into(),
+        speaker: None,
     };
     let turns = coalesce_transcript([
         entry(MeetingSource::Microphone, 0, 1_000, "First."),
@@ -162,6 +163,51 @@ fn transcript_entries_coalesce_into_source_turns_without_hiding_long_pauses() {
 }
 
 #[test]
+fn turns_split_when_the_reported_speaker_changes() {
+    let entry = |speaker: Option<&str>, start_ms, end_ms, text: &str| TranscriptEntry {
+        source: MeetingSource::System,
+        start_ms,
+        end_ms,
+        text: text.into(),
+        speaker: speaker.map(str::to_string),
+    };
+    let turns = coalesce_transcript([
+        entry(Some("Alice"), 0, 1_000, "First."),
+        entry(Some("Alice"), 1_200, 2_000, "Second."),
+        entry(Some("Bob"), 2_100, 3_000, "Third."),
+        entry(None, 3_100, 4_000, "Unclear."),
+    ]);
+
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[0].text, "First. Second.");
+    assert_eq!(turns[0].label(), "Alice");
+    assert_eq!(turns[1].label(), "Bob");
+    assert_eq!(turns[2].label(), "Them");
+}
+
+#[test]
+fn older_manifests_read_without_participants() {
+    let manifest: MeetingManifest = serde_json::from_str(
+        r#"{
+            "schema_version": 1,
+            "id": "1",
+            "title": "Zoom call — 2:30 PM",
+            "status": "complete",
+            "created_at_ms": 1760000000000,
+            "ended_at_ms": null,
+            "duration_ms": 1000,
+            "system": {"file": "system.wav", "samples": 0, "dropped_packets": 0},
+            "microphone": {"file": "microphone.wav", "samples": 0, "dropped_packets": 0},
+            "error": null
+        }"#,
+    )
+    .unwrap();
+    assert!(manifest.participants.is_empty());
+    assert!(manifest.self_name.is_none());
+    assert!(manifest.system.first_arrival_epoch_ms.is_none());
+}
+
+#[test]
 fn final_transcript_replaces_the_rolling_transcript_atomically() {
     let directory = std::env::temp_dir().join(format!(
         "hex-meeting-transcript-{}-{}",
@@ -174,6 +220,7 @@ fn final_transcript_replaces_the_rolling_transcript_atomically() {
         start_ms: 0,
         end_ms: 500,
         text: "rolling transcript".into(),
+        speaker: None,
     };
     fs::write(
         directory.join(transcript::ROLLING_FILE),
@@ -193,6 +240,7 @@ fn final_transcript_replaces_the_rolling_transcript_atomically() {
         start_ms: 0,
         end_ms: 500,
         text: "final transcript".into(),
+        speaker: None,
     };
     fs::write(
         directory.join("transcript.ndjson"),
@@ -228,6 +276,7 @@ fn reading_a_transcript_ignores_an_in_flight_trailing_write() {
         start_ms: 0,
         end_ms: 500,
         text: "complete".into(),
+        speaker: None,
     };
     fs::write(
         &path,
@@ -287,6 +336,8 @@ fn capture_failures_are_persisted_instead_of_looking_interrupted() {
         export_sha256: None,
         audio_removed_at_ms: None,
         imported: false,
+        participants: Vec::new(),
+        self_name: None,
     };
     write_manifest(&directory, &manifest).unwrap();
 
@@ -337,6 +388,8 @@ fn mid_meeting_capture_loss_proceeds_to_transcription_when_audio_was_recorded() 
         export_sha256: None,
         audio_removed_at_ms: None,
         imported: false,
+        participants: Vec::new(),
+        self_name: None,
     };
     let (sender, receiver) = mpsc::sync_channel(4);
 
@@ -941,6 +994,8 @@ fn retention_manifest(
         export_sha256: None,
         audio_removed_at_ms: None,
         imported: false,
+        participants: Vec::new(),
+        self_name: None,
     }
 }
 
@@ -1119,6 +1174,7 @@ fn paste_cursor_counts_coalesced_turns_and_advances_only_on_success() {
         start_ms,
         end_ms,
         text: text.into(),
+        speaker: None,
     };
     let initial = vec![
         entry(MeetingSource::Microphone, 0, 1_000, "First."),
@@ -1178,6 +1234,7 @@ fn paste_cursor_neither_repeats_nor_drops_text_when_the_transcript_is_rewritten(
         start_ms,
         end_ms,
         text: text.into(),
+        speaker: None,
     };
     let mut cursor = MeetingPasteCursor::default();
     let mut pasted = Vec::new();
@@ -1240,6 +1297,7 @@ fn paste_cursor_pastes_text_the_final_pass_recovers_for_skipped_audio() {
         start_ms,
         end_ms,
         text: text.into(),
+        speaker: None,
     };
     let mut cursor = MeetingPasteCursor::default();
     let mut paste = |entries: &[TranscriptEntry]| {
@@ -1322,7 +1380,7 @@ fn writer_fills_a_capture_gap_with_silence_and_records_it() {
         sender.send(packet_at(source, arrival_ms, 1_600)).unwrap();
     }
     drop(sender);
-    let stats = write_tracks(&directory, receiver, None).unwrap();
+    let stats = write_tracks(&directory, receiver, None, 1_760_000_000_000).unwrap();
     assert_eq!(stats.microphone.samples, 4_800);
     assert!(stats.microphone.gaps.is_empty());
     assert_eq!(stats.system.gaps.len(), 1);

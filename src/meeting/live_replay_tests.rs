@@ -262,6 +262,8 @@ fn meeting_live_replay() {
         export_sha256: None,
         audio_removed_at_ms: None,
         imported: false,
+        participants: Vec::new(),
+        self_name: None,
     };
     write_manifest(&directory, &manifest).unwrap();
 
@@ -555,7 +557,9 @@ impl Pipeline {
         let feed = rolling.feed();
         let writer = {
             let directory = directory.to_path_buf();
-            thread::spawn(move || write_tracks(&directory, receiver, feed))
+            thread::spawn(move || {
+                write_tracks(&directory, receiver, feed, crate::desktop::events::now_ms())
+            })
         };
         Self { writer, rolling }
     }

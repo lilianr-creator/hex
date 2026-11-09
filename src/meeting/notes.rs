@@ -73,8 +73,8 @@ pub(super) const NOTES_START: &str = "<!-- hex:notes -->";
 pub(super) const NOTES_END: &str = "<!-- /hex:notes -->";
 
 const SHORT_NOTES_INSTRUCTIONS: &str = "You title and summarize meeting transcripts. Each line \
-starts with a timestamp and a speaker label: You is the person who \
-recorded the meeting, and Them is one or more other participants. A long \
+starts with a timestamp and a speaker label: a name is that participant, You is the person who \
+recorded the meeting, and Them is one or more participants whose name was not clear. A long \
 meeting is excerpted, and […] marks skipped parts. Write one short, specific title for the whole \
 meeting and a summary of at most two short sentences on the main topics and outcomes. Leave \
 key_points, decisions, action_items, and open_questions empty. Use only what the transcript says; \
@@ -82,8 +82,8 @@ never invent names, dates, or numbers. Write the title and summary in the same l
 transcript.";
 
 const STANDARD_NOTES_INSTRUCTIONS: &str = "You write meeting minutes. Each line starts with a \
-timestamp and a speaker label: You is the person who \
-recorded the meeting, and Them is one or more other participants. A long meeting is \
+timestamp and a speaker label: a name is that participant, You is the person who recorded the \
+meeting, and Them is one or more participants whose name was not clear. A long meeting is \
 excerpted, and […] marks skipped parts. Use only what the transcript says; never invent names, \
 dates, numbers, owners, or deadlines. Write one short, specific title for the whole meeting. \
 Write the summary as three to five short paragraphs that cover the context, the main topics, the \
@@ -92,16 +92,16 @@ and open_questions empty. Write the title, summary, points, and decisions in the
 the transcript.";
 
 const DETAILED_NOTES_INSTRUCTIONS: &str = "You write meeting minutes. Each line starts with a \
-timestamp and a speaker label: You is the person who \
-recorded the meeting, and Them is one or more other participants. A long meeting is \
+timestamp and a speaker label: a name is that participant, You is the person who recorded the \
+meeting, and Them is one or more participants whose name was not clear. A long meeting is \
 excerpted, and […] marks skipped parts. Use only what the transcript says; never invent names, \
 dates, numbers, owners, or deadlines. Write one short, specific title for the whole meeting. \
 Write the summary as three to six short paragraphs that cover the context, the main topics, the \
 decisions, and the outcomes; do not repeat action items in it. List the key points, the \
 decisions, and open questions separately. List every task that someone explicitly agreed to do \
 as an action item, with owner, due date, transcript timestamp, and a short supporting quote when \
-the transcript gives them. Set owner to You only when the person who recorded the meeting \
-committed, and otherwise leave it null. Write the title, summary, points, decisions, action items, and questions \
+the transcript gives them. Set owner to the participant who committed, using their label, and \
+otherwise leave it null. Write the title, summary, points, decisions, action items, and questions \
 in the same language as the transcript.";
 
 fn notes_instructions(format: crate::app_settings::MeetingNotesFormat) -> &'static str {
@@ -114,8 +114,9 @@ fn notes_instructions(format: crate::app_settings::MeetingNotesFormat) -> &'stat
 }
 
 const TITLE_INSTRUCTIONS: &str = "You name meetings from the first part of their transcript. \
-Each line starts with a timestamp and a speaker label: You is the person who \
-recorded the meeting, and Them is one or more other participants. Write one short, specific title naming \
+Each line starts with a timestamp and a speaker label: a name is that participant, You is \
+the person who recorded the meeting, and Them is one or more participants whose name was not \
+clear. Write one short, specific title naming \
 the main topic. Use only what the transcript says.";
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -242,11 +243,7 @@ pub(super) fn excerpt_budget(context_tokens: usize, cap: usize) -> usize {
 fn transcript_lines(entries: &[TranscriptEntry]) -> Vec<String> {
     let mut lines = Vec::new();
     for turn in coalesce_transcript(entries.iter().cloned()) {
-        let prefix = format!(
-            "[{}] {}: ",
-            format_duration(turn.start_ms),
-            turn.source.label()
-        );
+        let prefix = format!("[{}] {}: ", format_duration(turn.start_ms), turn.label());
         let mut line = prefix.clone();
         for word in turn.text.split_whitespace() {
             if line.len() > prefix.len() && line.len() + 1 + word.len() > LINE_CHARS {
@@ -1001,19 +998,22 @@ pub(super) fn entries_from_markdown(markdown: &str) -> Vec<TranscriptEntry> {
                 let source = match label {
                     "You" => super::MeetingSource::Microphone,
                     "Them" => super::MeetingSource::System,
-                    _ => return None,
+                    _ => super::MeetingSource::System,
                 };
                 let (minutes, seconds) = clock.trim().split_once(':')?;
                 let start_ms =
                     (minutes.parse::<u64>().ok()? * 60 + seconds.parse::<u64>().ok()?) * 1_000;
-                Some((source, start_ms))
+                let speaker = (source == super::MeetingSource::System && label != "Them")
+                    .then(|| label.to_string());
+                Some((source, start_ms, speaker))
             });
-        if let Some((source, start_ms)) = header {
+        if let Some((source, start_ms, speaker)) = header {
             entries.push(TranscriptEntry {
                 source,
                 start_ms,
                 end_ms: start_ms,
                 text: String::new(),
+                speaker,
             });
             in_turn = true;
         } else if line.starts_with('#') || line.starts_with(NOTES_START) {
@@ -1134,6 +1134,7 @@ mod tests {
             start_ms,
             end_ms: start_ms + 1_000,
             text: text.into(),
+            speaker: None,
         }
     }
 
@@ -1151,6 +1152,22 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn transcript_lines_carry_participant_names() {
+        let mut entries = conversation(2);
+        entries[0].speaker = Some("Camille".into());
+        entries[1].speaker = Some("Alice".into());
+        let lines = transcript_lines(&entries);
+        assert!(
+            lines.iter().any(|line| line.contains("] Camille: ")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("] Alice: ")),
+            "{lines:?}"
+        );
     }
 
     fn generated(title: &str, summary: &str) -> GeneratedNotes {
@@ -1843,12 +1860,14 @@ mod tests {
                     start_ms: 1_000,
                     end_ms: 4_000,
                     text: "Hi.".into(),
+                    speaker: None,
                 },
                 TranscriptEntry {
                     source: MeetingSource::System,
                     start_ms: 4_000,
                     end_ms: 4_400,
                     text: "Hello.".into(),
+                    speaker: None,
                 },
             ]
         );

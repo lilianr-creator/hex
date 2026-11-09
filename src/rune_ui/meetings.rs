@@ -58,6 +58,8 @@ impl Status {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Turn {
     pub(super) mine: bool,
+    /// The participant the extension reported, when it named this turn.
+    pub(super) speaker: Option<String>,
     pub(super) start_ms: u64,
     pub(super) text: String,
     /// A silence of 30 s or more before this turn.
@@ -254,15 +256,15 @@ fn transcript_markdown(turns: &[Turn], imported: bool) -> String {
     turns
         .iter()
         .map(|turn| {
+            let name = turn.speaker.as_deref().unwrap_or(if imported {
+                "Speaker"
+            } else if turn.mine {
+                "You"
+            } else {
+                "Them"
+            });
             format!(
-                "**{}** · {}\n{}",
-                if imported {
-                    "Speaker"
-                } else if turn.mine {
-                    "You"
-                } else {
-                    "Them"
-                },
+                "**{name}** · {}\n{}",
                 clock_offset(turn.start_ms),
                 turn.text.trim()
             )
@@ -1206,13 +1208,18 @@ pub(super) fn turn_line(p: Paint, index: usize, turn: &Turn, imported: bool) -> 
                     .key("speaker")
                     .gap(8.0)
                     .child(
-                        text(if imported {
-                            tr("Speaker")
-                        } else if turn.mine {
-                            tr("You")
-                        } else {
-                            tr("Them")
-                        })
+                        text(turn.speaker.as_deref().map_or_else(
+                            || {
+                                if imported {
+                                    tr("Speaker").to_string()
+                                } else if turn.mine {
+                                    tr("You").to_string()
+                                } else {
+                                    tr("Them").to_string()
+                                }
+                            },
+                            str::to_string,
+                        ))
                         .key("name")
                         .font(p.k.ty.small_medium)
                         .color(if turn.mine && !imported {
@@ -1250,6 +1257,7 @@ mod tests {
     fn an_imported_meeting_labels_its_one_track_speaker() {
         let turn = |mine| Turn {
             mine,
+            speaker: None,
             start_ms: 1_000,
             text: "Hi.".into(),
             pause_before_ms: None,
@@ -1322,5 +1330,33 @@ mod tests {
         let label = notes_running_label(&ui);
         assert!(label.contains("OpenCode"), "{label}");
         assert!(!label.contains("Apple Intelligence"), "{label}");
+    }
+
+    #[test]
+    fn named_turns_keep_the_participant_name() {
+        let turn = |mine, speaker: Option<&str>, seconds: u64, text: &str| Turn {
+            mine,
+            speaker: speaker.map(str::to_string),
+            start_ms: seconds * 1_000,
+            text: text.into(),
+            pause_before_ms: None,
+        };
+        let markdown = transcript_markdown(
+            &[
+                turn(true, Some("Camille"), 1, "Hi."),
+                turn(false, Some("Sacha B."), 4, "Hello."),
+                turn(false, None, 7, "Unclear."),
+            ],
+            false,
+        );
+        assert!(markdown.contains("**Camille** · 00:01\nHi."), "{markdown}");
+        assert!(
+            markdown.contains("**Sacha B.** · 00:04\nHello."),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("**Them** · 00:07\nUnclear."),
+            "{markdown}"
+        );
     }
 }

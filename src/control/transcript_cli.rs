@@ -161,6 +161,9 @@ pub enum MeetingsCommand {
         #[command(flatten)]
         output: crate::control::cli::Output,
     },
+    /// Print the setup the browser extension needs: the running Hex's
+    /// endpoint and its stable presence token.
+    Presence,
 }
 
 #[derive(Serialize)]
@@ -571,6 +574,12 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
     let now = crate::desktop::events::now_ms();
     let mut out = io::stdout().lock();
     match command {
+        MeetingsCommand::Presence => {
+            let (endpoint, token) = crate::local_api::presence_setup()?;
+            writeln!(out, "endpoint={endpoint}")?;
+            writeln!(out, "token={token}")?;
+            Ok(())
+        }
         MeetingsCommand::List(args) => {
             let query = ListQuery {
                 since: args.since.clone(),
@@ -707,7 +716,8 @@ fn require_subtitle_export(on: bool) -> Result<()> {
 }
 
 /// One cue per transcript entry (a speaker turn), timed by the entry's
-/// offsets from the meeting's start and labelled You or Them.
+/// offsets from the meeting's start, labelled with the participant's
+/// name when the browser extension reported one, else You or Them.
 fn render_subtitles<'a>(
     entries: impl IntoIterator<Item = &'a crate::meeting::TranscriptEntry>,
     format: SubtitleFormat,
@@ -725,7 +735,9 @@ fn render_subtitles<'a>(
         number += 1;
         let start = entry.start_ms;
         let end = entry.end_ms.max(start);
-        let speaker = entry.source.label();
+        // A participant chose this name in Meet: keep it from ending the
+        // cue or the voice tag.
+        let speaker = cue_text(entry.label());
         match format {
             SubtitleFormat::Srt => {
                 out.push_str(&format!(
@@ -736,6 +748,10 @@ fn render_subtitles<'a>(
             }
             SubtitleFormat::Vtt => {
                 let text = text
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                let speaker = speaker
                     .replace('&', "&amp;")
                     .replace('<', "&lt;")
                     .replace('>', "&gt;");

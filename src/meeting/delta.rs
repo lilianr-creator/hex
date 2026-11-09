@@ -96,7 +96,7 @@ pub fn format_meeting_delta(entries: &[TranscriptEntry]) -> Result<String> {
     }
     Ok(coalesce_transcript(entries.iter().cloned())
         .into_iter()
-        .map(|entry| format!("{}: {}", entry.source.label(), entry.text))
+        .map(|entry| format!("{}: {}", entry.label(), entry.text))
         .collect::<Vec<_>>()
         .join("\n\n"))
 }

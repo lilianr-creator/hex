@@ -498,6 +498,11 @@ fn calendar_start(meeting: &CalendarMeeting) -> Start {
                 .map(str::to_string),
             calendar: Some(calendar_context(meeting)),
             title_source: meeting::TitleSource::Calendar,
+            meet_code: meeting
+                .link
+                .as_ref()
+                .filter(|link| link.provider == crate::calendar::CallProvider::GoogleMeet)
+                .and_then(|link| meeting::speakers::meet_code(&link.url)),
         },
         title: meeting.display_title(),
         app_label: provider

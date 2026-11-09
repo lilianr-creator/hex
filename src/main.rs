@@ -131,6 +131,9 @@ enum Command {
         #[arg(long)]
         device: Option<String>,
     },
+    /// Chrome's native messaging host: hands the extension its pairing.
+    #[command(hide = true)]
+    PresenceHost,
     /// Run the headless local API service.
     #[command(hide = true)]
     Service {
@@ -294,6 +297,9 @@ enum MeetingCommand {
 fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse_from(mcp_alias_arguments(std::env::args_os().collect()));
+    if matches!(&cli.command, Some(Command::PresenceHost)) {
+        return local_api::presence_host::run();
+    }
     let executable_name = std::env::current_exe()
         .ok()
         .and_then(|path| path.file_stem().map(ToOwned::to_owned));
@@ -397,6 +403,7 @@ fn main() -> Result<()> {
         }
     });
     match command {
+        Command::PresenceHost => unreachable!("handled before startup"),
         Command::App { hidden, device, .. } => open_app(event_path, device, hidden),
         Command::Listen { device } => {
             let _instance = desktop::instance::acquire("listener")?;

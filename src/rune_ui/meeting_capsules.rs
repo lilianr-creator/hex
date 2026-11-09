@@ -1560,6 +1560,7 @@ mod tests {
             start_ms,
             end_ms: start_ms + 2_000,
             text: text.into(),
+            speaker: None,
         };
         vec![
             entry(

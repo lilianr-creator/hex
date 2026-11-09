@@ -503,6 +503,13 @@ substitute for source inspection or a second roadmap.
   model at its lowest reasoning variant, or Auto while unchosen: `meeting/generator/auto` ranks the catalog by rule
   (fast tier, managed OpenCode first, newest, cheapest), never by a model
   list, and a generation tries its first three.
+- `meeting/speakers`, `local_api/presence`, `local_api/presence_host`:
+  participant names from the Google Meet extension (Labs › Meet
+  participant names, macOS)
+  (`extensions/gmeet-presence`, DOM only, no audio): the presence token and
+  `/meeting/presence` route, reports saved beside the recording, its Meet
+  code, and sentence attribution by speaking intervals; the native messaging
+  host that pairs the extension (macOS).
 - `dictation_activity`: whether dictation is capturing or transcribing, so
   meeting chunks and the local API yield, and the background priority they
   run at, on every OS.

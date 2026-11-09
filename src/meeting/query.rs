@@ -142,10 +142,16 @@ impl Meeting {
         }
     }
 
+    /// The names the browser extension reported, else You and Them.
     fn participants(&self) -> String {
+        let names = if self.manifest.participants.is_empty() {
+            "You, Them".to_owned()
+        } else {
+            self.manifest.participants.join(", ")
+        };
         match self.manifest.app.as_deref() {
-            Some(app) => format!("You, Them ({app})"),
-            None => "You, Them".into(),
+            Some(app) => format!("{names} ({app})"),
+            None => names,
         }
     }
 
@@ -194,9 +200,12 @@ fn status_name(status: MeetingStatus) -> &'static str {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum PassageKind {
-    Speech(MeetingSource),
+    Speech {
+        source: MeetingSource,
+        speaker: Option<String>,
+    },
     Notes,
 }
 
@@ -230,9 +239,11 @@ impl Passage {
         }
     }
 
-    fn speaker(&self) -> &'static str {
-        match self.kind {
-            PassageKind::Speech(source) => source.label(),
+    fn speaker(&self) -> &str {
+        match &self.kind {
+            PassageKind::Speech { source, speaker } => {
+                speaker.as_deref().unwrap_or_else(|| source.label())
+            }
             PassageKind::Notes => "Notes",
         }
     }
@@ -798,12 +809,13 @@ fn file_name(path: &Path) -> String {
 }
 
 fn passages(manifest: &MeetingManifest, entries: &[TranscriptEntry]) -> Vec<Passage> {
-    let mut groups: Vec<(MeetingSource, u64, u64, usize, String)> = Vec::new();
+    let mut groups: Vec<(MeetingSource, Option<String>, u64, u64, usize, String)> = Vec::new();
     for entry in entries {
         let text = entry.text.trim();
         let words = text.split_whitespace().count();
-        if let Some((source, _, end, count, joined)) = groups.last_mut()
+        if let Some((source, speaker, _, end, count, joined)) = groups.last_mut()
             && *source == entry.source
+            && *speaker == entry.speaker
             && entry.start_ms.saturating_sub(*end) <= TURN_GAP_MS
             && *count + words <= PASSAGE_WORDS
         {
@@ -814,6 +826,7 @@ fn passages(manifest: &MeetingManifest, entries: &[TranscriptEntry]) -> Vec<Pass
         } else {
             groups.push((
                 entry.source,
+                entry.speaker.clone(),
                 entry.start_ms,
                 entry.end_ms,
                 words,
@@ -823,7 +836,9 @@ fn passages(manifest: &MeetingManifest, entries: &[TranscriptEntry]) -> Vec<Pass
     }
     let mut passages = groups
         .into_iter()
-        .map(|(source, start, _, _, text)| Passage::new(PassageKind::Speech(source), start, text))
+        .map(|(source, speaker, start, _, _, text)| {
+            Passage::new(PassageKind::Speech { source, speaker }, start, text)
+        })
         .collect::<Vec<_>>();
     if let Some(notes) = &manifest.notes {
         passages.push(Passage::new(PassageKind::Notes, 0, notes.plain_text()));
@@ -1726,8 +1741,8 @@ fn render_search(
     for (rank, hit) in hits.iter().take(limit).enumerate() {
         let meeting = &hit.meeting;
         let passage = &meeting.passages[hit.passage];
-        let when = match passage.kind {
-            PassageKind::Speech(_) => format!(
+        let when = match &passage.kind {
+            PassageKind::Speech { .. } => format!(
                 "{} @ {}",
                 format_duration(passage.start_ms),
                 iso_local(meeting.start_ms() + passage.start_ms)
@@ -1744,7 +1759,7 @@ fn render_search(
             hit.score,
             hit.labels.join(", ")
         );
-        if let PassageKind::Speech(_) = passage.kind
+        if let PassageKind::Speech { .. } = &passage.kind
             && let Some(previous) = neighbor(meeting, hit.passage, false)
         {
             let _ = writeln!(
@@ -1756,7 +1771,7 @@ fn render_search(
             );
         }
         let _ = writeln!(output, "    hit: {}", snippet(passage, &hit.matched));
-        if let PassageKind::Speech(_) = passage.kind
+        if let PassageKind::Speech { .. } = &passage.kind
             && let Some(next) = neighbor(meeting, hit.passage, true)
         {
             let _ = writeln!(
@@ -1784,7 +1799,7 @@ fn neighbor(meeting: &Meeting, index: usize, forward: bool) -> Option<&Passage> 
             .checked_sub(1)
             .and_then(|index| meeting.passages.get(index))
     };
-    candidate.filter(|passage| matches!(passage.kind, PassageKind::Speech(_)))
+    candidate.filter(|passage| matches!(&passage.kind, PassageKind::Speech { .. }))
 }
 
 fn head(text: &str, limit: usize) -> String {
@@ -1975,7 +1990,7 @@ fn render_transcript(meeting: &Meeting, window: TranscriptWindow, now_ms: u64) -
             "[{} · {}] {}: {}",
             format_duration(turn.start_ms),
             clock_seconds(meeting.start_ms() + turn.start_ms),
-            turn.source.label(),
+            turn.label(),
             turn.text
         );
     }

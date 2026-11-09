@@ -156,6 +156,9 @@ impl Feature {
             Self::MeetingDescriptiveFilenames => {
                 "Rename exported meeting Markdown to the meeting's title once notes or a rename provide one, keeping the date and time"
             }
+            Self::MeetParticipants => {
+                "A Chrome extension tells Hex who speaks in Google Meet, so transcripts and notes name people instead of Them"
+            }
             Self::DetailedMeetingNotes => {
                 "OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose"
             }

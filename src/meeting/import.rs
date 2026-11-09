@@ -103,6 +103,7 @@ pub(crate) fn import(source: &Path) -> Result<MeetingManifest> {
                 first_pts_us: Some(0),
                 last_pts_us: Some(duration_ms as i64 * 1_000),
                 first_arrival_us: Some(0),
+                first_arrival_epoch_ms: None,
                 samples,
                 dropped_packets: 0,
                 gaps: Vec::new(),
@@ -132,6 +133,8 @@ pub(crate) fn import(source: &Path) -> Result<MeetingManifest> {
             export_sha256: None,
             audio_removed_at_ms: None,
             imported: true,
+            participants: Vec::new(),
+            self_name: None,
         };
         let system_path = directory.join("system.wav");
         fs::rename(&decoded, &system_path).wrap_err("could not keep the imported audio")?;

@@ -427,6 +427,12 @@ fn rows(ui: &Ui) -> Vec<Row> {
             tr("Rename exported meeting Markdown to the meeting's title once notes or a rename provide one, keeping the date and time"),
         ));
         rows.push(row(
+            Feature::MeetParticipants,
+            None,
+            tr("Meet participant names"),
+            tr("A Chrome extension tells Hex who speaks in Google Meet, so transcripts and notes name people instead of Them"),
+        ));
+        rows.push(row(
             Feature::DetailedMeetingNotes,
             None,
             tr("Detailed meeting notes"),
@@ -865,6 +871,7 @@ fn row_key(lab: Lab) -> &'static str {
         Feature::AnnotateReplay => "lab-annotate-replay",
         Feature::MeetingImport => "lab-meeting-import",
         Feature::MeetingDescriptiveFilenames => "lab-meeting-descriptive-filenames",
+        Feature::MeetParticipants => "lab-meet-participants",
         Feature::DetailedMeetingNotes => "lab-detailed-meeting-notes",
         Feature::MeetingLanguage => "lab-meeting-language",
         Feature::ExpireMeetingAudio => "lab-expire-meeting-audio",

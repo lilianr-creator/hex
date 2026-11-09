@@ -121,6 +121,7 @@ pub enum Feature {
     AnnotateReplay,
     MeetingImport,
     MeetingDescriptiveFilenames,
+    MeetParticipants,
     DetailedMeetingNotes,
     MeetingLanguage,
     QuitClosesWindow,
@@ -130,7 +131,7 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 64] = [
         Self::Meetings,
         Self::VoiceFilter,
         Self::Playground,
@@ -188,6 +189,7 @@ impl Feature {
         Self::AnnotateReplay,
         Self::MeetingImport,
         Self::MeetingDescriptiveFilenames,
+        Self::MeetParticipants,
         Self::DetailedMeetingNotes,
         Self::MeetingLanguage,
         Self::QuitClosesWindow,
@@ -274,6 +276,7 @@ impl Feature {
             | Self::AnnotateReplay
             | Self::MeetingImport
             | Self::MeetingDescriptiveFilenames
+            | Self::MeetParticipants
             | Self::DetailedMeetingNotes
             | Self::MeetingLanguage
             | Self::ExpireMeetingAudio
@@ -347,6 +350,7 @@ impl Feature {
             | Self::TerminalPasteShortcut
             | Self::ReleaseNotesLink
             | Self::OpenCodeInWsl => 20261108,
+            Self::MeetParticipants => 20261109,
             Self::DetailedMeetingNotes => 20261109,
             Self::MeetingLanguage => 20261109,
         }
@@ -388,7 +392,8 @@ impl Feature {
             | Self::SubtitleExport
             | Self::StopWhenCallEnds
             | Self::MovableMeetingCapsules
-            | Self::MeetingImport => cfg!(target_os = "macos"),
+            | Self::MeetingImport
+            | Self::MeetParticipants => cfg!(target_os = "macos"),
             Self::VoiceFilter => cfg!(any(target_os = "macos", target_os = "linux")),
             Self::TerminalPaste | Self::ShareShortcut | Self::OpenCodeInWsl => {
                 cfg!(target_os = "windows")
@@ -519,6 +524,7 @@ impl Feature {
             Self::AnnotateReplay => "annotate-replay",
             Self::MeetingImport => "meeting-import",
             Self::MeetingDescriptiveFilenames => "meeting-descriptive-filenames",
+            Self::MeetParticipants => "meet-participants",
             Self::DetailedMeetingNotes => "detailed-meeting-notes",
             Self::MeetingLanguage => "meeting-language",
             Self::QuitClosesWindow => "quit-closes-window",
@@ -588,6 +594,7 @@ impl Feature {
             Self::AnnotateReplay => "labs.annotate_replay",
             Self::MeetingImport => "labs.meeting_import",
             Self::MeetingDescriptiveFilenames => "labs.meeting_descriptive_filenames",
+            Self::MeetParticipants => "labs.meet_participants",
             Self::DetailedMeetingNotes => "labs.detailed_meeting_notes",
             Self::MeetingLanguage => "labs.meeting_language",
             Self::QuitClosesWindow => "labs.quit_closes_window",
@@ -661,6 +668,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay,
             Self::MeetingImport => settings.labs.meeting_import,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames,
+            Self::MeetParticipants => settings.labs.meet_participants,
             Self::DetailedMeetingNotes => settings.labs.detailed_meeting_notes,
             Self::MeetingLanguage => settings.labs.meeting_language,
             Self::QuitClosesWindow => settings.labs.quit_closes_window,
@@ -732,6 +740,7 @@ impl Feature {
             &mut labs.annotate_replay,
             &mut labs.meeting_import,
             &mut labs.meeting_descriptive_filenames,
+            &mut labs.meet_participants,
             &mut labs.detailed_meeting_notes,
             &mut labs.meeting_language,
             &mut labs.quit_closes_window,
@@ -803,6 +812,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay = on,
             Self::MeetingImport => settings.labs.meeting_import = on,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames = on,
+            Self::MeetParticipants => settings.labs.meet_participants = on,
             Self::DetailedMeetingNotes => settings.labs.detailed_meeting_notes = on,
             Self::MeetingLanguage => settings.labs.meeting_language = on,
             Self::QuitClosesWindow => settings.labs.quit_closes_window = on,
@@ -888,6 +898,8 @@ const OPENCODE_IN_WSL: u64 = CAPS_LOCK_SLOW_BLINK << 1;
 const MEETING_LANGUAGE: u64 = OPENCODE_IN_WSL << 1;
 /// The next bit above MEETING_LANGUAGE's switch.
 const DETAILED_MEETING_NOTES: u64 = MEETING_LANGUAGE << 1;
+/// The next bit above DETAILED_MEETING_NOTES's switch.
+const MEET_PARTICIPANTS: u64 = DETAILED_MEETING_NOTES << 1;
 
 /// This process's `labs` switches: unknown until settings load or one is
 /// first read.
@@ -1157,6 +1169,11 @@ pub fn meeting_descriptive_filenames() -> bool {
     on(MEETING_DESCRIPTIVE_FILENAMES) && Feature::MeetingDescriptiveFilenames.on_this_os()
 }
 
+/// Google Meet participant names from the browser extension (read where the presence route accepts a report, where a recording registers for them, and where Settings shows the extension).
+pub fn meet_participants() -> bool {
+    on(MEET_PARTICIPANTS) && Feature::MeetParticipants.on_this_os()
+}
+
 /// OpenCode notes follow `meetings.notes_format` (read where notes are planned and where Settings shows Summary style).
 pub fn detailed_meeting_notes() -> bool {
     on(DETAILED_MEETING_NOTES) && Feature::DetailedMeetingNotes.on_this_os()
@@ -1343,6 +1360,11 @@ fn encode_where(settings: &LabsSettings, reaches: impl Fn(Feature) -> bool) -> u
             Feature::MeetingDescriptiveFilenames,
             settings.meeting_descriptive_filenames,
             MEETING_DESCRIPTIVE_FILENAMES,
+        ),
+        (
+            Feature::MeetParticipants,
+            settings.meet_participants,
+            MEET_PARTICIPANTS,
         ),
         (
             Feature::DetailedMeetingNotes,
@@ -1885,6 +1907,16 @@ mod tests {
         let state = encode_where(&labs, |_| true);
         assert_ne!(state & DETAILED_MEETING_NOTES, 0);
         assert_eq!(state & MEETING_LANGUAGE, 0);
+    }
+
+    #[test]
+    fn meet_participants_is_its_own_bit_and_off_by_default() {
+        let mut labs = LabsSettings::default();
+        assert_eq!(encode_where(&labs, |_| true) & MEET_PARTICIPANTS, 0);
+        labs.meet_participants = true;
+        let state = encode_where(&labs, |_| true);
+        assert_ne!(state & MEET_PARTICIPANTS, 0);
+        assert_eq!(state & DETAILED_MEETING_NOTES, 0);
     }
 
     #[test]

@@ -555,6 +555,11 @@ const KEYS: &[Key] = &[
         "Labs: an exported meeting's Markdown follows its title once notes or a rename provide one, keeping the date and time",
     ),
     key(
+        "labs.meet_participants",
+        Kind::Bool,
+        "Labs: the Hex Meet Participants Chrome extension reports who speaks in Google Meet to Hex's local API, which names transcript turns (macOS)",
+    ),
+    key(
         "labs.detailed_meeting_notes",
         Kind::Bool,
         "Labs: with Summaries set to OpenCode, notes follow meetings.notes_format (short, standard, detailed) instead of a title and two sentences",
@@ -830,6 +835,7 @@ const NEEDS: &[(&str, &str)] = &[
     ("labs.meeting_notes_vocabulary", "meetings"),
     ("labs.meeting_finished_event", "meetings"),
     ("labs.meeting_descriptive_filenames", "meetings"),
+    ("labs.meet_participants", "meetings"),
     ("labs.detailed_meeting_notes", "meetings"),
     ("labs.meeting_language", "meetings"),
     ("labs.follow_live_transcript", "meetings"),

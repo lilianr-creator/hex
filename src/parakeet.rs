@@ -1473,6 +1473,7 @@ mod tests {
             start_ms,
             end_ms,
             text: text.into(),
+            speaker: None,
         };
         let entries = [
             entry(MeetingSource::Microphone, 0, 1_000, "First."),

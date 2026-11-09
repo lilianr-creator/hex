@@ -573,6 +573,9 @@ pub(super) fn meetings_settings(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<E
     }
     let mut after = Vec::new();
     if meetings.enabled {
+        if ui.platform.caps.meet_extension && ui.settings.labs.meet_participants {
+            rows.push(extension_row(p));
+        }
         more.push(icon_toggle_row(
             p,
             "meeting-indicator",
@@ -637,6 +640,48 @@ pub(super) fn meetings_settings(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<E
         }
     }
     sections
+}
+
+/// Whether the Chrome extension has checked in with this Hex. Two Chrome
+/// profiles count as two connections.
+fn extension_row(p: Paint) -> El {
+    let now = crate::desktop::events::now_ms();
+    let status = crate::meeting::speakers::bridge_status(now);
+    let connected = status.connected();
+    let control = row()
+        .key("status")
+        .gap(6.0)
+        .center_y()
+        .child(super::controls::status_dot(if connected {
+            p.success()
+        } else {
+            p.muted()
+        }))
+        .child(
+            text(if connected {
+                tr("Connected")
+            } else {
+                tr("Not connected")
+            })
+            .key("label")
+            .font(p.k.ty.ui_medium)
+            .color(if connected { p.success() } else { p.muted() }),
+        );
+    let description = if status.clients.len() > 1 {
+        tr_fill("{} extensions connected", &status.clients.len().to_string())
+    } else if connected {
+        tr("Reads who is speaking in Google Meet").to_string()
+    } else {
+        tr("Install the native host, then press Pair with Hex in the extension").to_string()
+    };
+    icon_row(
+        p,
+        "meeting-extension",
+        &icons::GLOBE,
+        tr("Chrome extension"),
+        Some(description.as_str()),
+        control,
+    )
 }
 
 /// How long finished meetings are kept before they move to the Trash.

@@ -9,6 +9,7 @@ fn entry(source: MeetingSource, start_ms: u64, text: &str) -> TranscriptEntry {
         start_ms,
         end_ms: start_ms + 5_000,
         text: text.into(),
+        speaker: None,
     }
 }
 

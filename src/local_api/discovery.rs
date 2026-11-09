@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use super::DEVELOPER_CONTROL_TIMEOUT;
 use super::{API_VERSION, CONNECTION_TIMEOUT, LIVE_PROBE_TIMEOUT};
 
+/// The file beside the discovery document that remembers the local API's
+/// port between launches, so a browser extension keeps one endpoint.
+const PORT_FILE: &str = "local-api-port";
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct DiscoveryDocument {
@@ -102,6 +106,19 @@ pub fn running_pid() -> Option<u32> {
     live_discovery().ok().map(|document| document.pid)
 }
 
+/// The running app's endpoint and presence token: what the browser
+/// extension's popup stores once. The token is created here if no extension
+/// asked for it yet.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn presence_setup() -> Result<(String, String)> {
+    let path = crate::app_paths::local_api_discovery_file()?;
+    let document = live_discovery()?;
+    let token =
+        crate::meeting::speakers::read_token(&crate::meeting::speakers::token_beside(&path))
+            .ok_or_else(|| eyre!("Hex has no presence token yet; restart it and try again"))?;
+    Ok((format!("http://127.0.0.1:{}", document.port), token))
+}
+
 pub(super) fn live_discovery() -> Result<DiscoveryDocument> {
     let path = crate::app_paths::local_api_discovery_file()?;
     let bytes = match fs::read(&path) {
@@ -170,7 +187,7 @@ pub(super) fn error_code(status: u16, body: &[u8]) -> String {
         .unwrap_or_else(|| format!("http-{status}"))
 }
 
-pub(super) fn generate_token() -> Result<String> {
+pub(crate) fn generate_token() -> Result<String> {
     let mut random = [0_u8; 32];
     getrandom::fill(&mut random).map_err(|error| eyre!("could not generate API token: {error}"))?;
     let mut token = String::with_capacity(68);
@@ -180,6 +197,33 @@ pub(super) fn generate_token() -> Result<String> {
         write!(token, "{byte:02x}").expect("writing to a string cannot fail");
     }
     Ok(token)
+}
+
+/// The port the last run used, so a local client such as the presence
+/// extension keeps one endpoint across launches. The discovery file itself
+/// is removed on a clean quit; this file is not.
+pub(super) fn preferred_port(discovery_path: &Path) -> Option<u16> {
+    let path = discovery_path.with_file_name(PORT_FILE);
+    fs::read_to_string(path)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+        .filter(|port| *port >= 1024)
+}
+
+pub(super) fn remember_port(discovery_path: &Path, port: u16) {
+    let path = discovery_path.with_file_name(PORT_FILE);
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    if let Err(error) = options
+        .open(&path)
+        .and_then(|mut file| file.write_all(format!("{port}\n").as_bytes()))
+    {
+        tracing::debug!(%error, "could not remember the local API port");
+    }
 }
 
 pub(super) fn prepare_discovery_path(path: &Path) -> Result<()> {

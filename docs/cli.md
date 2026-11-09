@@ -42,6 +42,7 @@ hex
 │   ├── record [--title T]         as the menu bar's Record Meeting; needs meetings.enabled
 │   ├── stop                       Stop & Transcribe
 │   ├── copy-last                  copy the last meeting transcript to the clipboard
+│   ├── presence                   the browser extension's endpoint and token
 │   └── list | show | search       read-only (docs/transcript-cli.md)
 ├── settings
 │   ├── list                       every setting: key, value, kind, choices, writable, about

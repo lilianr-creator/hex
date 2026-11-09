@@ -17,14 +17,19 @@ mod dictation;
 mod discovery;
 mod http;
 mod meeting_events;
+mod presence;
+pub(crate) mod presence_host;
 mod streams;
 
 #[cfg(debug_assertions)]
 #[cfg_attr(not(target_os = "macos"), allow(unused_imports))]
 pub use discovery::call_developer;
 use discovery::*;
-pub use discovery::{call_control, running_pid};
+pub use discovery::{call_control, presence_setup, running_pid};
 use http::*;
+
+/// A fresh `hex_` token, also the presence bridge's stored pairing secret.
+pub(crate) use discovery::generate_token;
 const API_VERSION: &str = "2";
 const LIVE_PROBE_TIMEOUT: Duration = Duration::from_millis(150);
 /// The longest the accept loop sleeps without a connection. Shutdown wakes
@@ -83,6 +88,9 @@ struct AuthObservationLimiter {
 
 struct HttpContext {
     token: Arc<str>,
+    /// The stable pairing token the browser extension sends; absent on an
+    /// embedded or test API that publishes no discovery file.
+    presence_token: Option<Arc<str>>,
     health: HealthProvider,
     events: EventLog,
     auth_limiter: AuthObservationLimiter,
@@ -214,15 +222,27 @@ impl LocalApi {
         }
         let (transcription_service, transcription) =
             crate::transcription::service::TranscriptionService::start()?;
-        let listener = TcpListener::bind("127.0.0.1:0").wrap_err("could not bind the local API")?;
+        let preferred_port = discovery_path.as_deref().and_then(preferred_port);
+        let listener = bind_local_api(preferred_port)?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?;
+        if let Some(path) = &discovery_path {
+            remember_port(path, address.port());
+        }
         let document = DiscoveryDocument {
             port: address.port(),
             token: generate_token()?,
             api_version: API_VERSION.into(),
             pid: std::process::id(),
         };
+        // Created before the discovery file moves, and before any client asks.
+        let presence_token = discovery_path.as_deref().and_then(|path| {
+            crate::meeting::speakers::token_at(&crate::meeting::speakers::token_beside(path))
+                .inspect_err(|error| {
+                    tracing::warn!(%error, "presence token unavailable; the extension can't pair")
+                })
+                .ok()
+        });
         let discovery = if let Some(path) = discovery_path {
             write_discovery(&path, &document)?;
             Some(DiscoveryLease {
@@ -244,6 +264,7 @@ impl LocalApi {
         let unexpected_shutdown = worker_shutdown.clone();
         let http_context = HttpContext {
             token: token.into(),
+            presence_token: presence_token.map(Arc::from),
             health,
             events: worker_events.clone(),
             auth_limiter: AuthObservationLimiter::default(),
@@ -613,6 +634,16 @@ fn http_worker(pending: Arc<Mutex<Receiver<TcpStream>>>, context: Arc<HttpContex
                     tracing::debug!(%error, "control client disconnected");
                 }
             }
+            RequestAction::Presence {
+                content_length,
+                body_prefix,
+            } => {
+                let response =
+                    presence::ingest(&mut stream, content_length, body_prefix, &context.shutdown);
+                if let Err(error) = write_response(&mut stream, response) {
+                    tracing::debug!(%error, "presence client disconnected");
+                }
+            }
             RequestAction::DictationStart {
                 content_length,
                 body_prefix,
@@ -637,8 +668,20 @@ fn http_worker(pending: Arc<Mutex<Receiver<TcpStream>>>, context: Arc<HttpContex
     }
 }
 
+fn bind_local_api(preferred_port: Option<u16>) -> Result<TcpListener> {
+    if let Some(port) = preferred_port
+        && let Ok(listener) = TcpListener::bind(("127.0.0.1", port))
+    {
+        return Ok(listener);
+    }
+    TcpListener::bind("127.0.0.1:0").wrap_err("could not bind the local API")
+}
+
 fn handle_request(request: HttpRequest, context: &HttpContext) -> RequestAction {
     let path = request.path.split('?').next().unwrap_or("/");
+    if path == presence::PATH {
+        return presence::route(request, context);
+    }
     if request.authorization.as_deref() != Some(&format!("Bearer {}", context.token)) {
         context
             .auth_limiter
@@ -1376,6 +1419,10 @@ enum RequestAction {
         body_prefix: Vec<u8>,
     },
     Control {
+        content_length: usize,
+        body_prefix: Vec<u8>,
+    },
+    Presence {
         content_length: usize,
         body_prefix: Vec<u8>,
     },
@@ -2148,6 +2195,7 @@ mod tests {
             crate::transcription::service::TranscriptionService::start().unwrap();
         let context = HttpContext {
             token: "test-token".into(),
+            presence_token: None,
             health,
             events,
             auth_limiter: AuthObservationLimiter::default(),
@@ -2297,6 +2345,94 @@ mod tests {
         let second = generate_token().unwrap();
         assert!(valid_token(&first));
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn presence_reports_take_the_extension_token_only() {
+        crate::labs::apply(&crate::app_settings::LabsSettings {
+            meet_participants: true,
+            ..Default::default()
+        });
+        let directory = temp_directory();
+        let discovery = directory.join("local-api.json");
+        let events = EventLog::create(&directory.join("events.ndjson")).unwrap();
+        let api = start_published(discovery.clone(), events).unwrap();
+        let port = api.document.port;
+        let extension_token =
+            crate::meeting::speakers::token_at(&crate::meeting::speakers::token_beside(&discovery))
+                .unwrap();
+        let post = |token: &str, body: &str| {
+            raw_request(
+                port,
+                &format!(
+                    "POST /meeting/presence HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                ),
+            )
+        };
+
+        if !cfg!(target_os = "macos") {
+            // Labs › Meet participant names is macOS only: the route isn't
+            // there, whatever the token.
+            assert!(post(&extension_token, "{}").starts_with("HTTP/1.1 404"));
+            return;
+        }
+        assert!(post("hex_wrong", "{}").starts_with("HTTP/1.1 401"));
+        // The API's own per-launch token does not open the presence route.
+        assert!(post(&api.document.token, "{}").starts_with("HTTP/1.1 401"));
+        // The extension token reaches the handler, which refuses bad JSON.
+        assert!(post(&extension_token, "not json").starts_with("HTTP/1.1 400"));
+
+        // Every authenticated check-in counts, and two profiles are two.
+        let check_in = |token: &str, client: &str| {
+            raw_request(
+                port,
+                &format!(
+                    "GET /meeting/presence?client={client} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
+                ),
+            )
+        };
+        assert!(check_in("hex_wrong", "a").starts_with("HTTP/1.1 401"));
+        let first = check_in(&extension_token, "profile-a");
+        assert!(first.starts_with("HTTP/1.1 200"));
+        let second = check_in(&extension_token, "profile-b");
+        let body: serde_json::Value =
+            serde_json::from_str(response_body(&second)).expect("check-in JSON");
+        assert_eq!(body["connected"], true);
+        assert!(body["extensions"].as_u64().unwrap() >= 2);
+
+        drop(api);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_published_api_reuses_its_port_across_restarts() {
+        let directory = temp_directory();
+        let discovery = directory.join("local-api.json");
+        let events = EventLog::create(&directory.join("events.ndjson")).unwrap();
+        let first = start_published(discovery.clone(), events.clone()).unwrap();
+        let port = first.document.port;
+        drop(first);
+
+        let second = start_published(discovery, events).unwrap();
+        assert_eq!(second.document.port, port);
+    }
+
+    #[test]
+    fn a_taken_preferred_port_falls_back_to_an_ephemeral_one() {
+        let directory = temp_directory();
+        let discovery = directory.join("local-api.json");
+        let holder = TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = holder.local_addr().unwrap().port();
+        fs::write(
+            discovery.with_file_name("local-api-port"),
+            format!("{taken}\n"),
+        )
+        .unwrap();
+        let events = EventLog::create(&directory.join("events.ndjson")).unwrap();
+
+        let api = start_published(discovery, events).unwrap();
+        assert_ne!(api.document.port, taken);
     }
 
     fn start_published(discovery_path: PathBuf, events: EventLog) -> Result<LocalApi> {

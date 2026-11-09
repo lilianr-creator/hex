@@ -88,6 +88,7 @@ impl Feature {
             | Self::GnomeMeetingCapsules
             | Self::MeetingImport
             | Self::MeetingDescriptiveFilenames
+            | Self::MeetParticipants
             | Self::DetailedMeetingNotes
             | Self::MeetingLanguage
             | Self::ExpireMeetingAudio => Group::Meetings,

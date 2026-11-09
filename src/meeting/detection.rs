@@ -203,6 +203,8 @@ impl MeetingCandidate {
             } else {
                 crate::meeting::TitleSource::Call
             },
+            // Only a Google Meet code: the browser extension reports by it.
+            meet_code: self.call.as_deref().and_then(super::speakers::meet_code),
         }
     }
 
@@ -1855,6 +1857,11 @@ mod tests {
         assert_eq!(code_only.title, "Google Meet");
         assert!(!code_only.named);
         assert_eq!(code_only.recording_start().title, None);
+        assert_eq!(
+            code_only.recording_start().meet_code.as_deref(),
+            Some("abc-defg-hij"),
+            "the code leaves the title but still names the Meet"
+        );
 
         let named_prefix = candidate_from_context(&context(
             "Google Chrome",

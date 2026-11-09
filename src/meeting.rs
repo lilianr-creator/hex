@@ -15,7 +15,6 @@ use crate::desktop::events::now_ms;
 use crate::durable::{sync_directory, sync_file};
 
 const SAMPLE_RATE: u32 = 16_000;
-const TRANSCRIPT_TURN_GAP_MS: u64 = 3_000;
 /// Beside the manifest of a meeting Hex quit while recording or during its
 /// final transcription: its audio is
 /// saved and its final transcript runs at the next launch.
@@ -62,8 +61,10 @@ pub mod query;
 mod retention;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub(crate) mod runtime;
+pub(crate) mod speakers;
 pub(crate) mod sweep;
 mod transcript;
+mod turns;
 mod warning;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) mod watcher;
@@ -83,6 +84,7 @@ pub use notes::{summarize, summarize_file};
 pub use retention::audio_expired;
 pub use retention::{expire, expire_audio, expired, retention_for};
 pub use transcript::TranscriptReader;
+pub use turns::{MeetingSource, TranscriptEntry, coalesce_transcript};
 pub use warning::TrackWarning;
 
 /// What the recorder knows about a meeting when it starts.
@@ -99,6 +101,10 @@ pub struct MeetingStart {
     pub calendar: Option<MeetingCalendar>,
     /// Where `title` came from; ignored without a title.
     pub title_source: TitleSource,
+    /// The Google Meet code (`abc-defg-hij`) of the detected call or the
+    /// calendar event's Meet link, so only that Meet's extension reports
+    /// name its participants.
+    pub meet_code: Option<String>,
 }
 
 /// Where a meeting's title came from. Only a title the user typed is never
@@ -235,6 +241,13 @@ pub struct MeetingManifest {
     /// labelled Speaker.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub imported: bool,
+    /// Everyone the browser extension saw in the call, the local
+    /// participant first. Empty when no extension reported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub participants: Vec<String>,
+    /// The local participant's name, which labels what the microphone heard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub self_name: Option<String>,
 }
 
 impl MeetingManifest {
@@ -292,6 +305,11 @@ pub struct TrackManifest {
     pub first_pts_us: Option<i64>,
     pub last_pts_us: Option<i64>,
     pub first_arrival_us: Option<u64>,
+    /// Wall clock at the first packet's arrival, which is what `first_arrival_us`
+    /// means on the transcript timeline. Names reported by the browser
+    /// extension are aligned against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_arrival_epoch_ms: Option<u64>,
     pub samples: u64,
     pub dropped_packets: u64,
     /// Stretches where this source captured nothing while the meeting kept
@@ -332,51 +350,6 @@ fn missing_samples(track: &TrackManifest, packet: &AudioPacket) -> u64 {
         missing
     } else {
         0
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct TranscriptEntry {
-    pub source: MeetingSource,
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-}
-
-pub fn coalesce_transcript(
-    entries: impl IntoIterator<Item = TranscriptEntry>,
-) -> Vec<TranscriptEntry> {
-    let mut turns: Vec<TranscriptEntry> = Vec::new();
-    for entry in entries {
-        if let Some(turn) = turns.last_mut()
-            && turn.source == entry.source
-            && entry.start_ms.saturating_sub(turn.end_ms) <= TRANSCRIPT_TURN_GAP_MS
-        {
-            if !turn.text.ends_with(char::is_whitespace) {
-                turn.text.push(' ');
-            }
-            turn.text.push_str(entry.text.trim());
-            turn.end_ms = turn.end_ms.max(entry.end_ms);
-        } else {
-            turns.push(entry);
-        }
-    }
-    turns
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MeetingSource {
-    System,
-    Microphone,
-}
-
-impl MeetingSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::System => "Them",
-            Self::Microphone => "You",
-        }
     }
 }
 
@@ -474,6 +447,7 @@ pub fn record(
     set_owner_only(&meeting_dir, true)?;
     let _active = ActiveMeeting::acquire(&meeting_dir)?;
 
+    let meet_code = start.meet_code;
     let given_title = start.title.filter(|title| !title.trim().is_empty());
     let title_source = match (&given_title, start.title_source) {
         (None, _) => TitleSource::Default,
@@ -516,9 +490,13 @@ pub fn record(
         export_sha256: None,
         audio_removed_at_ms: None,
         imported: false,
+        participants: Vec::new(),
+        self_name: None,
     };
     set_title_source(&mut manifest, title_source);
     write_manifest(&meeting_dir, &manifest)?;
+    let _presence = crate::labs::meet_participants()
+        .then(|| speakers::register(&manifest.id, &meeting_dir, meet_code));
 
     let result = (|| -> Result<MeetingManifest> {
         if shutdown.load(Ordering::Relaxed) {
@@ -532,7 +510,13 @@ pub fn record(
         let rolling_feed = rolling.feed();
         let flush_registration = transcript::register_flusher(&manifest.id, rolling.flusher());
         let writer_dir = meeting_dir.clone();
-        let writer = thread::spawn(move || write_tracks(&writer_dir, receiver, rolling_feed));
+        let capture_clock = Instant::now();
+        // Packets carry offsets from `capture_clock`; this is that clock's
+        // wall time, which the browser extension's reports are aligned to.
+        let capture_epoch_ms = now_ms();
+        let writer = thread::spawn(move || {
+            write_tracks(&writer_dir, receiver, rolling_feed, capture_epoch_ms)
+        });
         let cleanup_failed_setup =
             |sender: SyncSender<AudioPacket>, writer: thread::JoinHandle<Result<CaptureStats>>| {
                 drop(sender);
@@ -540,7 +524,6 @@ pub fn record(
                     tracing::error!(%cleanup_error, "could not finalize failed meeting setup");
                 }
             };
-        let capture_clock = Instant::now();
         let sleep_prevention = crate::audio::idle_sleep::prevent_sleep();
         let sink = |source, drops: &Arc<AtomicU64>| capture::PacketSink {
             source,
@@ -828,6 +811,7 @@ fn write_tracks(
     directory: &Path,
     receiver: Receiver<AudioPacket>,
     mut rolling: Option<transcript::RollingFeed>,
+    capture_epoch_ms: u64,
 ) -> Result<CaptureStats> {
     let mut system = None;
     let mut microphone = None;
@@ -887,6 +871,9 @@ fn write_tracks(
             track.samples += missing;
         }
         track.first_arrival_us.get_or_insert(packet.arrival_us);
+        track
+            .first_arrival_epoch_ms
+            .get_or_insert(capture_epoch_ms + packet.arrival_us / 1_000);
         packet.position = track.samples;
         track.samples += packet.samples.len() as u64;
         for &sample in &packet.samples {
@@ -934,9 +921,24 @@ fn transcribe(
     selection: &crate::transcription::models::TranscriptionSelection,
     rolling: Option<transcript::RollingOutcome>,
 ) -> Result<()> {
-    let (transcript, echo_suppressed) =
+    let (mut transcript, echo_suppressed) =
         transcript::transcribe(directory, manifest, selection, rolling)?;
     manifest.echo_suppressed_utterances = echo_suppressed;
+    // Names from the browser extension are aligned to the transcript's own
+    // zero, which is the earliest track's first packet.
+    if let Some(presence) = speakers::take(&manifest.id).or_else(|| speakers::load(directory)) {
+        let named = speakers::origin_epoch_ms(manifest).map_or(0, |origin| {
+            speakers::attribute(&mut transcript, &presence, origin)
+        });
+        tracing::info!(
+            meeting = %manifest.id,
+            named,
+            turns = transcript.len(),
+            "attributed meeting speakers"
+        );
+        manifest.participants = presence.participants;
+        manifest.self_name = presence.self_name;
+    }
     // Transcription takes a while; the headings use a rename made meanwhile.
     keep_rename(directory, manifest);
 
@@ -1152,7 +1154,7 @@ pub fn transcript_markdown(entries: &[TranscriptEntry]) -> String {
         .map(|turn| {
             format!(
                 "**{}** · {}\n{}",
-                turn.source.label(),
+                notes::markdown_text(turn.label()),
                 format_duration(turn.start_ms),
                 turn.text.trim()
             )
@@ -1380,7 +1382,7 @@ fn markdown_line(entry: &TranscriptEntry) -> String {
     format!(
         "**{} {}**  {}",
         format_duration(entry.start_ms),
-        entry.source.label(),
+        entry.label(),
         entry.text
     )
 }

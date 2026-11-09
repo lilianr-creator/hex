@@ -275,6 +275,7 @@ impl TrackTranscript {
                         start_ms: chunk_ms + start,
                         end_ms: chunk_ms + end,
                         text,
+                        speaker: None,
                     })
                 })
                 .collect()
@@ -286,6 +287,7 @@ impl TrackTranscript {
                     start_ms: chunk_ms,
                     end_ms: chunk_ms + duration_ms,
                     text: text.into(),
+                    speaker: None,
                 })
                 .into_iter()
                 .collect()
@@ -405,6 +407,7 @@ impl TrackTranscript {
                     .map(|word| word.end_ms)
                     .max()
                     .unwrap_or_default() as u64,
+                speaker: None,
                 text: group
                     .iter()
                     .map(|word| word.text.as_str())
@@ -2141,6 +2144,17 @@ pub(super) fn render_markdown(manifest: &MeetingManifest, entries: &[TranscriptE
     if let Some(app) = &manifest.app {
         markdown.push_str(&format!("- **App:** {app}\n"));
     }
+    if !manifest.participants.is_empty() {
+        markdown.push_str(&format!(
+            "- **Participants:** {}\n",
+            manifest
+                .participants
+                .iter()
+                .map(|name| super::notes::markdown_text(name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     if let Some(calendar) = &manifest.calendar {
         if calendar.title.trim() != manifest.title.trim() && !calendar.title.trim().is_empty() {
             markdown.push_str(&format!("- **Calendar:** {}\n", calendar.title.trim()));
@@ -2163,7 +2177,10 @@ pub(super) fn render_markdown(manifest: &MeetingManifest, entries: &[TranscriptE
     for turn in turns {
         markdown.push_str(&format!(
             "**{}** · {}\n{}\n\n",
-            manifest.speaker_label(turn.source),
+            turn.speaker.as_deref().map_or_else(
+                || manifest.speaker_label(turn.source).to_owned(),
+                super::notes::markdown_text
+            ),
             format_duration(turn.start_ms),
             turn.text.trim()
         ));
@@ -2305,6 +2322,7 @@ mod tests {
             start_ms,
             end_ms,
             text: text.into(),
+            speaker: None,
         }
     }
 
@@ -4034,6 +4052,32 @@ mod tests {
         assert!(markdown.contains("**You** · 00:01\nHi. Can you hear me?\n\n"));
         assert!(markdown.contains("**Them** · 00:04\nLoud and clear.\n"));
         assert!(!markdown.contains("Attendees"));
+    }
+
+    #[test]
+    fn markdown_names_reported_participants() {
+        let mut manifest = manifest();
+        manifest.participants = vec!["Camille".into(), "Alice".into()];
+        let mut mic = entry(MeetingSource::Microphone, 1_000, 2_000, "Hi.");
+        mic.speaker = Some("Camille".into());
+        let mut system = entry(MeetingSource::System, 2_000, 4_000, "Hello.");
+        system.speaker = Some("Alice".into());
+        let markdown = render_markdown(&manifest, &[mic, system]);
+        assert!(markdown.contains("- **Participants:** Camille, Alice\n"));
+        assert!(markdown.contains("**Camille** · 00:01\nHi.\n\n"));
+        assert!(markdown.contains("**Alice** · 00:02\nHello.\n"));
+    }
+
+    #[test]
+    fn markdown_escapes_names_a_participant_chose() {
+        let mut manifest = manifest();
+        manifest.participants = vec!["<!--".into(), "[x](https://evil)".into()];
+        let mut system = entry(MeetingSource::System, 2_000, 4_000, "Hello.");
+        system.speaker = Some("<!--".into());
+        let markdown = render_markdown(&manifest, &[system]);
+        assert!(!markdown.contains("<!--"), "{markdown}");
+        assert!(markdown.contains("- **Participants:** &lt;\\!--, \\[x\\](https://evil)\n"));
+        assert!(markdown.contains("**&lt;\\!--** · 00:02\nHello.\n"));
     }
 
     #[test]

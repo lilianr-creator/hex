@@ -1208,6 +1208,19 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Pins the language for every meeting chunk", "Fixa o idioma para cada trecho da reunião"),
     ("Meeting language", "Idioma das reuniões"),
     ("Pin the language meetings are transcribed in, instead of following dictation", "Fixa o idioma em que as reuniões são transcritas, em vez de seguir o ditado"),
+    ("Summary style", "Estilo do resumo"),
+    ("Short", "Curto"),
+    ("Standard", "Padrão"),
+    ("Detailed", "Detalhado"),
+    ("Unassigned", "Sem responsável"),
+    ("due:", "prazo:"),
+    ("Key points", "Pontos principais"),
+    ("Decisions", "Decisões"),
+    ("Next steps", "Próximos passos"),
+    ("Open questions", "Perguntas em aberto"),
+    ("Short: two sentences. Standard: key points and decisions. Detailed: next steps and open questions", "Curto: duas frases. Padrão: pontos principais e decisões. Detalhado: próximos passos e perguntas em aberto"),
+    ("Detailed meeting notes", "Notas detalhadas de reuniões"),
+    ("OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose", "O OpenCode escreve pontos principais, decisões, próximos passos e perguntas em aberto no estilo de resumo escolhido"),
 ];
 
 #[cfg(test)]

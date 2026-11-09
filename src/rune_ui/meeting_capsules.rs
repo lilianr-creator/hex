@@ -1041,7 +1041,15 @@ fn ready(
     let summary = manifest
         .notes
         .as_ref()
-        .map(|notes| notes.summary.trim().to_string())
+        .map(|notes| {
+            notes
+                .summary
+                .split("\n\n")
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        })
         .filter(|summary| !summary.is_empty());
     let subtitle = if meeting::notes_in_progress(&manifest.id) {
         tr("Writing a title and summary with Apple Intelligence…").to_owned()

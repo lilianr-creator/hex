@@ -17,8 +17,8 @@ use super::platform::{CalendarRequest, MeetingRequest, NotesAvailability, Os, Pl
 use super::settings::toggle_menu;
 use super::{Menu, Pane, ShortcutTarget, Ui, icons};
 use crate::app_settings::{
-    AppSettings, CALENDAR_LEAD_MINUTES, HotkeyBinding, MeetingPolicy, MeetingProviderChoice,
-    MeetingRetention, MeetingSummaries, ModifierSide,
+    AppSettings, CALENDAR_LEAD_MINUTES, HotkeyBinding, MeetingNotesFormat, MeetingPolicy,
+    MeetingProviderChoice, MeetingRetention, MeetingSummaries, ModifierSide,
 };
 use crate::audio::hex_microphone::DriverActionState;
 use crate::calendar::{CalendarAccess, CallProvider};
@@ -376,7 +376,7 @@ fn summaries_rows(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<CardRow> {
             .into(),
         );
     }
-    let model = if summary_model_shown(ui) {
+    let mut model: Vec<El> = if summary_model_shown(ui) {
         super::models::rows(ui, p, super::models::Target::MeetingSummary, layer)
             .into_iter()
             .map(super::controls::nested)
@@ -389,6 +389,9 @@ fn summaries_rows(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<CardRow> {
     } else {
         Vec::new()
     };
+    if summary_model_shown(ui) && ui.settings.labs.detailed_meeting_notes {
+        model.push(super::controls::nested(notes_format_row(ui, p, layer)));
+    }
     rows.push(folding("summary-model", model));
     rows
 }
@@ -748,6 +751,38 @@ pub(super) fn summary_model_problem(saved: &str) -> Option<&'static str> {
     (!saved.trim().is_empty() && crate::meeting::generator::parse_model(saved).is_none()).then(|| {
         tr("Write it as provider/model, such as openai/gpt-5.4-mini. Until then, Hex tries its list of fast models")
     })
+}
+
+/// How much the OpenCode model writes (Labs › Detailed meeting notes).
+fn notes_format_row(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    let chosen = ui.settings.meetings.notes_format;
+    let control = super::general::pick_select(
+        ui,
+        p,
+        "meeting-notes-format",
+        tr("Summary style"),
+        MeetingNotesFormat::ALL
+            .iter()
+            .map(|format| tr(format.label()))
+            .collect(),
+        MeetingNotesFormat::ALL
+            .iter()
+            .position(|format| *format == chosen)
+            .unwrap_or_default(),
+        |ui, index| {
+            ui.update(|settings| settings.meetings.notes_format = MeetingNotesFormat::ALL[index]);
+        },
+        layer,
+    );
+    setting_row(
+        p,
+        "meeting-notes-format",
+        tr("Summary style"),
+        Some(tr(
+            "Short: two sentences. Standard: key points and decisions. Detailed: next steps and open questions",
+        )),
+        control,
+    )
 }
 
 static ZOOM_ICON: Icon = Icon {

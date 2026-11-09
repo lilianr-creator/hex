@@ -83,6 +83,44 @@ pub struct MeetingSettings {
     /// picks a fast model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode_model: Option<String>,
+    /// How much an OpenCode model writes while Labs › Detailed meeting notes
+    /// is on; Apple Intelligence always writes Short notes.
+    pub notes_format: MeetingNotesFormat,
+}
+
+/// How much detail the OpenCode notes writer produces.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum MeetingNotesFormat {
+    /// One short paragraph of at most two sentences.
+    Short = 0,
+    /// A multi-paragraph summary with key points and decisions.
+    Standard = 1,
+    /// The full notes: summary, key points, decisions, action items, and
+    /// open questions.
+    #[default]
+    Detailed = 2,
+}
+
+impl MeetingNotesFormat {
+    pub const ALL: [Self; 3] = [Self::Short, Self::Standard, Self::Detailed];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Short => "Short",
+            Self::Standard => "Standard",
+            Self::Detailed => "Detailed",
+        }
+    }
+
+    pub(super) const fn decode(value: u8) -> Self {
+        match value {
+            0 => Self::Short,
+            1 => Self::Standard,
+            _ => Self::Detailed,
+        }
+    }
 }
 
 /// Who writes meeting titles and summaries. There is no fallback: Mac never
@@ -333,6 +371,7 @@ impl Default for MeetingSettings {
             retention: None,
             audio_retention: None,
             opencode_model: None,
+            notes_format: MeetingNotesFormat::default(),
         }
     }
 }
@@ -374,6 +413,16 @@ pub fn meeting_language() -> Option<String> {
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
+}
+
+/// The OpenCode notes format, as last applied; Short while Labs › Detailed
+/// meeting notes is off.
+pub fn meeting_notes_format() -> MeetingNotesFormat {
+    if crate::labs::detailed_meeting_notes() {
+        MeetingNotesFormat::decode(MEETING_NOTES_FORMAT.load(Ordering::Acquire))
+    } else {
+        MeetingNotesFormat::Short
+    }
 }
 
 /// Who writes meeting notes, as last applied.

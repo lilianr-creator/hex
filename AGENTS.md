@@ -499,7 +499,10 @@ substitute for source inspection or a second roadmap.
 - `meeting/generator`: who writes notes and live chapters: Apple
   Intelligence on a Mac that has it, else OpenCode when
   `meetings.summarize_with_opencode` is on (off by default; it sends the
-  transcript excerpt).
+  transcript excerpt) on `meetings.opencode_model`, a pinned provider and
+  model at its lowest reasoning variant, or Auto while unchosen: `meeting/generator/auto` ranks the catalog by rule
+  (fast tier, managed OpenCode first, newest, cheapest), never by a model
+  list, and a generation tries its first three.
 - `dictation_activity`: whether dictation is capturing or transcribing, so
   meeting chunks and the local API yield, and the background priority they
   run at, on every OS.
@@ -512,8 +515,12 @@ substitute for source inspection or a second roadmap.
   bleed/local classification of microphone segments.
 - `meeting/notes`: a bounded provisional title while recording, then one
   post-publication call over a bounded transcript excerpt for the final title
-  and a two-sentence summary, with deadline, manifest storage, and
-  marker-delimited in-place Markdown updates.
+  and notes in `meetings.notes_format` with Labs › Detailed meeting notes
+  (Short, Standard, Detailed: summary, key points, decisions, action items,
+  open questions; always Short from Apple Intelligence) in the meeting's
+  language, with deadline, manifest
+  storage, and marker-delimited in-place Markdown updates (`notes/clean`,
+  `notes/render`).
 - `meeting/chapters`: live chapters (Labs): one
   on-device pass per ~3 minutes of rolling transcript while recording, with
   Rust deciding topic changes, the per-boundary fix-up after publication,

@@ -55,6 +55,8 @@ static HEX_MICROPHONE_ENABLED: AtomicBool = AtomicBool::new(false);
 static MEETING_SUMMARIES: AtomicU8 = AtomicU8::new(MeetingSummaries::platform_default() as u8);
 /// [`MeetingSettings::language`] for the running meeting controller.
 static MEETING_LANGUAGE: RwLock<Option<String>> = RwLock::new(None);
+/// [`MeetingSettings::notes_format`] for the notes writer.
+static MEETING_NOTES_FORMAT: AtomicU8 = AtomicU8::new(MeetingNotesFormat::Detailed as u8);
 static MEETING_INDICATOR_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_CORNER: AtomicU8 = AtomicU8::new(0);
 /// [`MeetingRetention::encode`]d; [`RETENTION_UNSET`] until settings apply.
@@ -813,6 +815,7 @@ impl AppSettings {
             MeetingRetention::encode(self.meetings.audio_retention),
             Ordering::Release,
         );
+        MEETING_NOTES_FORMAT.store(self.meetings.notes_format as u8, Ordering::Release);
         *MEETING_OUTPUT_FOLDER
             .get_or_init(Default::default)
             .write()

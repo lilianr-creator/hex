@@ -484,14 +484,11 @@ impl Library {
             if meeting.in_progress {
                 let _ = writeln!(
                     output,
-                    "No notes yet: the meeting is still {}. Hex writes a title and summary after it is transcribed.",
+                    "No notes yet: the meeting is still {}. Hex writes the title and notes after it is transcribed.",
                     status_name(meeting.status)
                 );
             } else {
-                let _ = writeln!(
-                    output,
-                    "No Apple Intelligence notes are stored for this meeting."
-                );
+                let _ = writeln!(output, "No meeting notes are stored for this meeting.");
                 if let Some(error) = &meeting.manifest.notes_error {
                     let _ = writeln!(output, "Last notes attempt failed: {error}");
                 }
@@ -504,7 +501,7 @@ impl Library {
         };
         let _ = writeln!(
             output,
-            "Apple Intelligence title and summary, generated {}{}",
+            "Meeting notes, generated {}{}",
             iso_local(notes.generated_at_ms),
             if notes.excerpted() {
                 " from an excerpt of the transcript"
@@ -515,20 +512,11 @@ impl Library {
         if !notes.title.trim().is_empty() {
             let _ = writeln!(output, "Title: {}", notes.title.trim());
         }
-        let summary = notes.summary.trim();
+        let _ = writeln!(output, "\n{}", notes_markdown(notes));
         let _ = writeln!(
             output,
-            "Summary: {}",
-            if summary.is_empty() {
-                "(none)"
-            } else {
-                summary
-            }
-        );
-        let _ = writeln!(
-            output,
-            "\nThis is only a short model-written overview and may be wrong. Read the transcript \
-with get_transcript or search_transcripts for details, decisions, and action items."
+            "\nThese notes are model-written and may be wrong. Check names, owners, and dates \
+against the transcript with get_transcript or search_transcripts."
         );
         Ok(output)
     }
@@ -838,8 +826,7 @@ fn passages(manifest: &MeetingManifest, entries: &[TranscriptEntry]) -> Vec<Pass
         .map(|(source, start, _, _, text)| Passage::new(PassageKind::Speech(source), start, text))
         .collect::<Vec<_>>();
     if let Some(notes) = &manifest.notes {
-        let text = format!("{}. {}", notes.title.trim(), notes.summary.trim());
-        passages.push(Passage::new(PassageKind::Notes, 0, text));
+        passages.push(Passage::new(PassageKind::Notes, 0, notes.plain_text()));
     }
     passages
 }

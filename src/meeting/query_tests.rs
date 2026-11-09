@@ -446,12 +446,12 @@ fn notes_are_read_and_their_absence_is_explicit() {
     // An older manifest with action items and decisions reads as title and summary.
     let notes = library().notes(WEEKLY).unwrap();
     assert!(notes.contains("Title: Scheduled Sessions Plan"), "{notes}");
-    assert!(notes.contains("Summary: Dax proposed scheduled sessions for agents."));
-    assert!(!notes.contains("Prototype the runner") && !notes.contains("Decisions"));
-    assert!(notes.contains("Read the transcript with get_transcript"));
+    assert!(notes.contains("## Summary\n\nDax proposed scheduled sessions for agents."));
+    assert!(notes.contains("### Decisions\n\n- Ship scheduled sessions next week."));
+    assert!(notes.contains("**Unassigned** — Prototype the runner"));
 
     let missing = library().notes(ROADMAP).unwrap();
-    assert!(missing.contains("No Apple Intelligence notes are stored for this meeting."));
+    assert!(missing.contains("No meeting notes are stored for this meeting."));
     assert!(missing.contains("Last notes attempt failed: Apple Intelligence is not available"));
     assert!(missing.contains("Use get_transcript"));
 

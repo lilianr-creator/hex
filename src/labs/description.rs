@@ -156,6 +156,9 @@ impl Feature {
             Self::MeetingDescriptiveFilenames => {
                 "Rename exported meeting Markdown to the meeting's title once notes or a rename provide one, keeping the date and time"
             }
+            Self::DetailedMeetingNotes => {
+                "OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose"
+            }
             Self::MeetingLanguage => {
                 "Pin the language meetings are transcribed in, instead of following dictation"
             }

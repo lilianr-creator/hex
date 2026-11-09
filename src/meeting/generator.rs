@@ -2,26 +2,46 @@
 //! writer Meetings › Settings › Summaries names, Apple Intelligence on this
 //! Mac or the OpenCode model, with no fallback from one to the other.
 //! OpenCode receives the transcript excerpt, so it is opt-in on every OS.
+//! Without a chosen OpenCode model, notes run on Auto's ranked models (see
+//! `auto`), never on the dictation ranking.
 
-use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError, RwLock};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::app_settings::MeetingSummaries;
+use crate::app_settings::{MeetingNotesFormat, MeetingSummaries};
 use crate::dictation::processor::Model;
+
+mod auto;
 
 /// OpenCode's models take far more than any excerpt Hex sends.
 const OPENCODE_CONTEXT_TOKENS: usize = 32_000;
+/// Meeting notes are summarization, not reasoning: the lowest variant a note
+/// model offers is faster and as accurate as its default high/max, which made
+/// a long transcript spend the whole call deadline thinking.
+const NOTES_VARIANTS: &[&str] = &["low", "minimal", "none", "medium"];
 
+/// Notes as a model answers them. Every field reads leniently: models
+/// answer `null` for fields they were told to leave empty, and one loose
+/// field must not cost the whole answer.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 pub struct GeneratedNotes {
+    #[serde(default, deserialize_with = "super::notes::text_or_null")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::notes::summary_text")]
     pub summary: String,
+    #[serde(default, deserialize_with = "super::notes::list_or_null")]
+    pub key_points: Vec<String>,
+    #[serde(default, deserialize_with = "super::notes::list_or_null")]
+    pub decisions: Vec<String>,
+    #[serde(default, deserialize_with = "super::notes::list_or_null")]
+    pub action_items: Vec<super::ActionItem>,
+    #[serde(default, deserialize_with = "super::notes::list_or_null")]
+    pub open_questions: Vec<String>,
     /// Who wrote these notes; set by `generate_notes`, never by the model.
     #[serde(skip)]
     pub written_by: Option<NotesWriter>,
@@ -147,6 +167,12 @@ pub(crate) fn available() -> Result<(), String> {
     writer().map(|_| ())
 }
 
+/// Whether an OpenCode model writes the notes now, which can write more
+/// than Apple Intelligence's title and two sentences.
+pub(crate) fn opencode_writes() -> bool {
+    matches!(writer(), Ok(Writer::OpenCode))
+}
+
 /// The writer's context window in tokens, or zero when none is available.
 pub(crate) fn context_tokens() -> usize {
     match writer() {
@@ -173,12 +199,14 @@ pub(crate) fn generate_notes(
             })
         }
         Writer::OpenCode => {
-            let (notes, model) = opencode_reporting::<GeneratedNotes>(
-                instructions,
-                prompt,
-                r#"{"title": "...", "summary": "..."}"#,
-                timeout,
-            )?;
+            let shape = match crate::app_settings::meeting_notes_format() {
+                MeetingNotesFormat::Short => r#"{"title": "...", "summary": "..."}"#,
+                MeetingNotesFormat::Standard | MeetingNotesFormat::Detailed => {
+                    r#"{"title": "...", "summary": "...", "key_points": ["..."], "decisions": ["..."], "action_items": [{"owner": null, "task": "...", "due": null, "at": "mm:ss", "quote": "..."}], "open_questions": ["..."]}"#
+                }
+            };
+            let (notes, model) =
+                opencode_reporting::<GeneratedNotes>(instructions, prompt, shape, timeout)?;
             Ok(GeneratedNotes {
                 written_by: Some(NotesWriter::OpenCode {
                     model: model.map(|model| format!("{}/{}", model.provider, model.id)),
@@ -279,8 +307,13 @@ fn opencode_reporting<T: DeserializeOwned>(
                 GenerationError::Failed(format!("{}/{}: {error:#}", model.provider, model.id))
             })?
         }
-        None => crate::dictation::processor::generate_text(&request, timeout, &cancelled)
-            .map_err(|error| GenerationError::Failed(format!("{error:#}")))?,
+        None => crate::dictation::processor::generate_text_among(
+            &request,
+            &auto_models(),
+            timeout,
+            &cancelled,
+        )
+        .map_err(|error| GenerationError::Failed(format!("{error:#}")))?,
     };
     Ok((parse_json(&generated.text)?, generated.model))
 }
@@ -304,7 +337,7 @@ pub(crate) fn parse_model(saved: &str) -> Option<(&str, &str)> {
 }
 
 /// The model meeting notes must use: the saved `provider/model`, when it
-/// is valid.
+/// is valid, with the lowest reasoning variant the catalog offers for it.
 fn summary_model() -> Option<Model> {
     let saved = SUMMARY_MODEL
         .read()
@@ -314,8 +347,79 @@ fn summary_model() -> Option<Model> {
     Some(Model {
         provider: provider.into(),
         id: id.into(),
-        variant: None,
+        variant: notes_variant(&format!("{provider}/{id}")),
     })
+}
+
+/// The variant `key` runs with, looked up in the catalog once per model
+/// rather than on every title, chapter, and note; `None` without a catalog
+/// or a variant to choose, so OpenCode answers with the model's default.
+fn notes_variant(key: &str) -> Option<String> {
+    static RESOLVED: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+    let resolved = || RESOLVED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, variant)) = resolved().iter().find(|(known, _)| known == key) {
+        return variant.clone();
+    }
+    let catalog = crate::dictation::processor::load_model_catalog()
+        .ok()
+        .flatten()?;
+    let choice = catalog.models.iter().find(|choice| choice.key == key)?;
+    let variant = preferred_variant(&choice.variants, NOTES_VARIANTS)
+        .or_else(|| catalog.recommended_variant_for(key))
+        .map(str::to_owned);
+    resolved().push((key.to_owned(), variant.clone()));
+    variant
+}
+
+/// The first preferred variant the model offers.
+fn preferred_variant<'a>(offered: &'a [String], preferred: &[&str]) -> Option<&'a str> {
+    preferred.iter().find_map(|candidate| {
+        offered
+            .iter()
+            .find(|variant| variant.as_str() == *candidate)
+            .map(String::as_str)
+    })
+}
+
+/// Auto's models, read from the catalog at most every five minutes so a
+/// meeting's titles, chapters, and notes share one lookup. Without a catalog
+/// there are none, and OpenCode answers with its own default model.
+fn auto_models() -> Vec<Model> {
+    const FRESH: Duration = Duration::from_secs(5 * 60);
+    static CACHED: Mutex<Option<(Instant, Vec<Model>)>> = Mutex::new(None);
+    let cached = || CACHED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((at, models)) = cached().as_ref()
+        && at.elapsed() < FRESH
+    {
+        return models.clone();
+    }
+    let Some(catalog) = crate::dictation::processor::load_model_catalog()
+        .ok()
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    let models: Vec<Model> = auto::ranked(&catalog)
+        .into_iter()
+        .take(auto::CANDIDATES)
+        .filter_map(|choice| {
+            let (provider, id) = choice.key.split_once('/')?;
+            let variant = preferred_variant(&choice.variants, NOTES_VARIANTS)
+                .or_else(|| catalog.recommended_variant_for(&choice.key))
+                .map(str::to_owned);
+            Some(Model {
+                provider: provider.into(),
+                id: id.into(),
+                variant,
+            })
+        })
+        .collect();
+    tracing::info!(
+        models = ?models.iter().map(|model| format!("{}/{}", model.provider, model.id)).collect::<Vec<_>>(),
+        "automatic meeting summary models"
+    );
+    *cached() = Some((Instant::now(), models.clone()));
+    models
 }
 
 /// The JSON object in a model's answer, ignoring code fences or prose
@@ -351,6 +455,35 @@ mod tests {
         let lines: GeneratedChapterLines = parse_json("{\"lines\": [3, 4]}").unwrap();
         assert_eq!(lines.lines, [3, 4]);
         assert!(parse_json::<GeneratedNotes>("no json here").is_err());
+    }
+
+    #[test]
+    fn the_first_offered_preferred_variant_wins() {
+        let offered = ["high".to_string(), "low".to_string(), "max".to_string()];
+        assert_eq!(
+            preferred_variant(&offered, &["minimal", "low"]),
+            Some("low")
+        );
+        assert_eq!(preferred_variant(&offered, &["medium"]), None);
+        assert_eq!(preferred_variant(&[], &["low"]), None);
+    }
+
+    #[test]
+    fn loose_answers_keep_their_notes() {
+        let notes: GeneratedNotes = parse_json(
+            r#"{"title": "Sync", "summary": ["One.", "Two."], "key_points": null,
+                "decisions": null, "open_questions": null,
+                "action_items": [{"owner": null, "task": "Ship", "at": 125, "due": null},
+                                 {"owner": "Ana", "task": null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(notes.title, "Sync");
+        assert_eq!(notes.summary, "One. Two.");
+        assert!(notes.key_points.is_empty() && notes.decisions.is_empty());
+        assert_eq!(notes.action_items[0].at.as_deref(), Some("125"));
+        assert_eq!(notes.action_items[1].task, "");
+        let title_only: GeneratedNotes = parse_json(r#"{"title": null}"#).unwrap();
+        assert_eq!(title_only.title, "");
     }
 
     #[test]

@@ -1211,6 +1211,19 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Pins the language for every meeting chunk", "Закрепляет язык для каждого фрагмента встречи"),
     ("Meeting language", "Язык встреч"),
     ("Pin the language meetings are transcribed in, instead of following dictation", "Закрепляет язык расшифровки встреч вместо языка диктовки"),
+    ("Summary style", "Стиль резюме"),
+    ("Short", "Кратко"),
+    ("Standard", "Стандартно"),
+    ("Detailed", "Подробно"),
+    ("Unassigned", "Не назначено"),
+    ("due:", "срок:"),
+    ("Key points", "Ключевые моменты"),
+    ("Decisions", "Решения"),
+    ("Next steps", "Следующие шаги"),
+    ("Open questions", "Открытые вопросы"),
+    ("Short: two sentences. Standard: key points and decisions. Detailed: next steps and open questions", "Кратко: два предложения. Стандартно: ключевые моменты и решения. Подробно: следующие шаги и открытые вопросы"),
+    ("Detailed meeting notes", "Подробные заметки встреч"),
+    ("OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose", "OpenCode записывает ключевые моменты, решения, следующие шаги и открытые вопросы в выбранном стиле резюме"),
 ];
 
 #[cfg(test)]

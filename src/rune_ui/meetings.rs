@@ -25,6 +25,10 @@ use crate::desktop::file_dialog::{Dialog, Filter, Pending, Target};
 use crate::desktop::i18n::{tr, tr_fill, tr_named};
 
 mod fixture;
+mod notes;
+
+use notes::notes_block;
+pub(super) use notes::{ActionItemView, NotesView};
 
 static MORE_ICON: rune::Icon = rune::Icon {
     name: "hex-more",
@@ -91,7 +95,7 @@ pub(super) struct Meeting {
     pub(super) clock: String,
     pub(super) duration_ms: u64,
     pub(super) app: Option<String>,
-    pub(super) summary: Option<String>,
+    pub(super) notes: Option<NotesView>,
     pub(super) notes_running: bool,
     /// The exported Markdown while it still exists, which `Reveal Markdown`
     /// selects and Trash takes too; otherwise the recording folder, which
@@ -128,13 +132,31 @@ impl Meeting {
             "{} {} {}",
             self.title,
             self.app.as_deref().unwrap_or_default(),
-            self.summary.as_deref().unwrap_or_default()
+            self.notes
+                .as_ref()
+                .map(|notes| notes.plain_text())
+                .unwrap_or_default()
         );
         for turn in self.turns() {
             text.push(' ');
             text.push_str(&turn.text);
         }
         text.to_lowercase()
+    }
+
+    /// The notes as the Markdown copy writes them, for Copy summary.
+    fn notes_markdown(&self) -> String {
+        let Some(notes) = &self.notes else {
+            return String::new();
+        };
+        crate::meeting::notes_markdown(&crate::meeting::MeetingNotes {
+            summary: notes.summary.clone(),
+            key_points: notes.key_points.clone(),
+            decisions: notes.decisions.clone(),
+            action_items: notes.action_items.clone(),
+            open_questions: notes.open_questions.clone(),
+            ..Default::default()
+        })
     }
 }
 
@@ -898,29 +920,8 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
             Tone::Warning,
         ));
     }
-    if let Some(summary) = &meeting.summary {
-        let summary = summary.trim();
-        body = body.child(
-            col()
-                .key("notes")
-                .gap(6.0)
-                .child(section_label(p, "summary-label", tr("Summary")))
-                .child(
-                    text(if summary.is_empty() {
-                        tr("Nothing to summarize.")
-                    } else {
-                        summary
-                    })
-                    .key("summary")
-                    .font(p.k.ty.body)
-                    .color(if summary.is_empty() {
-                        p.faint()
-                    } else {
-                        p.text()
-                    })
-                    .wrap(),
-                ),
-        );
+    if let Some(notes) = &meeting.notes {
+        body = body.child(notes_block(p, notes));
     } else if meeting.notes_running {
         body = body.child(
             text(notes_running_label(ui))
@@ -1046,8 +1047,9 @@ fn overflow(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> Option
         .open(ui.open == Some(Menu::MeetingActions))
         .on_close(|ui: &mut Ui| ui.open = None);
     let mut items = 0;
-    if let Some(summary) = meeting.summary.clone() {
+    if meeting.notes.is_some() {
         let id = meeting.id.clone();
+        let notes = meeting.notes_markdown();
         let copied = ui
             .meetings
             .copied
@@ -1061,7 +1063,7 @@ fn overflow(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> Option
                 tr("Copy summary")
             })
             .on_select_tx(move |ui: &mut Ui, tx: &mut Tx| {
-                copy(ui, tx, id.clone(), "notes", summary.trim().to_string());
+                copy(ui, tx, id.clone(), "notes", notes.clone());
                 ui.open = Some(Menu::MeetingActions);
             }),
         );
@@ -1098,7 +1100,7 @@ fn overflow(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> Option
         } else {
             let id = meeting.id.clone();
             menu = menu.item(
-                MenuItem::new(if meeting.summary.is_some() {
+                MenuItem::new(if meeting.notes.is_some() {
                     tr("Regenerate summary")
                 } else {
                     tr("Summarize")

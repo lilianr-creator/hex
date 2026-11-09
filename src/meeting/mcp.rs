@@ -263,10 +263,10 @@ continue.",
     }
 
     #[tool(
-        description = "The stored Apple Intelligence title and summary (at most two sentences) \
-for a meeting. Only a short overview: read the transcript with get_transcript or \
-search_transcripts for details, decisions, and action items. Never generates notes; when none \
-are stored it says so.",
+        description = "The stored meeting notes: title, multi-paragraph summary, key points, \
+decisions, action items with owners, and open questions. Read the transcript with get_transcript \
+or search_transcripts for supporting detail. Never generates notes; when none are stored it \
+says so.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     fn get_meeting_notes(

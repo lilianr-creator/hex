@@ -214,7 +214,15 @@ type MeetingList = {
 type MeetingShow = {
   version: 1
   meeting: Meeting
-  notes: { title: string; summary: string; generated_at_ms: number } | null
+  notes: {
+    title: string
+    summary: string // one or more paragraphs
+    key_points: string[]
+    decisions: string[]
+    action_items: { owner: string | null; task: string; due: string | null; at: string | null; quote: string | null }[]
+    open_questions: string[]
+    generated_at_ms: number
+  } | null
   range?: { from_ms: number; to_ms: number | null } // only with --from or --to
   chapters?: Chapter[] // only when the meeting has chapters
   chapter?: Chapter // only with --chapter

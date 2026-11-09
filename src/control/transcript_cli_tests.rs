@@ -690,3 +690,36 @@ fn parses_release_commands_and_rejects_invalid_limits_and_times() {
         second + 123
     );
 }
+
+#[test]
+fn meeting_json_carries_the_detailed_notes() {
+    let library =
+        Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings"));
+    let shared = library.meeting("1790000500000-1002").unwrap();
+    // The library keeps the meeting it read: let go of it to edit the copy.
+    drop(library);
+    let mut meeting = std::sync::Arc::try_unwrap(shared)
+        .ok()
+        .expect("only this test holds the meeting");
+    meeting.manifest.notes = Some(crate::meeting::MeetingNotes {
+        title: "Roadmap".into(),
+        summary: "Profiling first.".into(),
+        decisions: vec!["Profile before onboarding".into()],
+        action_items: vec![crate::meeting::ActionItem {
+            owner: Some("Ana".into()),
+            task: "Write the release notes".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let json = meeting_json(&meeting, OffsetRange::default(), NOW).unwrap();
+    let notes = &json["notes"];
+    assert_eq!(notes["summary"], "Profiling first.");
+    assert_eq!(notes["key_points"], serde_json::json!([]));
+    assert_eq!(
+        notes["decisions"],
+        serde_json::json!(["Profile before onboarding"])
+    );
+    assert_eq!(notes["action_items"][0]["owner"], "Ana");
+    assert_eq!(notes["action_items"][0]["due"], serde_json::Value::Null);
+}

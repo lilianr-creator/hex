@@ -44,7 +44,11 @@ Labs > Meetings switch (macOS)                       // meetings.opt-in; off by 
 │   │           Model nests under it: a searchable picker of the running
 │   │           OpenCode's models (refreshed each time it opens; no Refresh),
 │   │           "Hex picks a fast model" first (clears meetings.opencode_model
-│   │           -> the ranked fast models); a pick is used alone, no fallback.
+│   │           -> Auto: the newest fast models on managed OpenCode, see
+│   │           Notes Model Auto); a pick is used alone, no fallback, at its
+│   │           lowest reasoning variant. With Labs › Detailed meeting notes
+│   │           on, Summary style (Short / Standard / Detailed) nests under
+│   │           Model.
 │   │           OpenCode missing or failing -> a notice with Check again /
 │   │           Retry, the saved model kept and shown by its ID (#1107, #1301)
 │   │       // checks: summaries_are_one_choice_with_opencode_s_model_under_it,
@@ -1295,7 +1299,7 @@ Checks: `retention_expires_meetings_by_when_they_ended_and_skips_active_ones`,
 [app_settings.rs](../../src/app_settings.rs). No live run of an expiry pass
 against a real Trash has been observed.
 
-### Titles And Summary (Apple Intelligence)
+### Titles And Notes
 
 ```ts
 While recording, setting on, model available           // meetings.title.provisional
@@ -1322,11 +1326,28 @@ Final publication complete                               // meetings.notes
      ├── Lines "[mm:ss] You|Them: text" (long turns split at 600 chars)
      ├── Whole transcript when it fits; otherwise opening 30 %, up to six
      │   evenly spaced middle passages, ending 20 %, "[…]" between them
-     ├── Budget = min(12,000 chars, (context − 1,000 tokens) × 3 chars)
+     ├── Budget = min(cap, (context − 1,000 tokens) × 3 chars); the cap is
+     │   12,000 chars, or 48,000 when OpenCode writes Standard or Detailed notes
      └── Context exceeded -> retried once with half the excerpt
-  -> 90 s total deadline; the call ≤60 s
-  -> Manifest: notes { title ≤8 words, summary ≤2 sentences / 400 chars,
-     excerpt_chars, transcript_chars, written_by }
+  -> The manifest's language (Labs › Meeting language, or the dictation
+     language snapshotted at Start) tells the writer which language every
+     field uses
+  -> 180 s total deadline; each call ≤120 s
+  -> OpenCode with Labs › Detailed meeting notes on writes the Summary style
+     (meetings.notes_format, Detailed by default):
+     ├── Short -> title ≤8 words, summary ≤2 sentences (as with the lab off)
+     ├── Standard -> summary of 3–5 paragraphs, key_points, decisions
+     └── Detailed -> summary of 3–6 paragraphs, key_points, decisions,
+         action_items [{ owner, task, due, at, quote }] (owner You only when
+         stated), open_questions
+  -> Apple Intelligence always writes Short notes, whatever the Summary style:
+     its schema holds a title and at most two sentences
+  -> Answers are read leniently: null lists read as empty, a numeric `at` as
+     text, an action item without a task is dropped; one loose field never
+     costs the whole answer
+  -> Manifest: notes { title, summary, key_points, decisions, action_items,
+     open_questions, generated_at_ms, elapsed_ms, excerpt_chars,
+     transcript_chars, written_by }
      └── written_by: {"writer": "apple_intelligence"} or {"writer": "opencode",
          "model": "provider/model"} (no model when OpenCode's default answered);
          absent on notes written before #1125
@@ -1335,7 +1356,11 @@ Final publication complete                               // meetings.notes
      │   the block is written, the file is renamed to the final title,
      │   keeping its date and time prefix; a taken name adds " (2)"
      ├── Heading -> final title, only while it still reads Hex's last title
-     ├── <!-- hex:notes --> ## Summary (one paragraph) above ## Transcript
+     ├── <!-- hex:notes --> ## Summary, then optional ### Key points,
+     │   ### Decisions, ### Next steps, ### Open questions, above ## Transcript;
+     │   model text has `<` escaped and owner names their Markdown escaped, so
+     │   no text can open a comment or fake a marker; markers count only as
+     │   whole lines
      │   └── Footer names the writer: "Written on this Mac by Apple
      │       Intelligence", "Written by <provider/model> through OpenCode", or,
      │       for older notes without written_by, no writer at all (#1125;
@@ -1343,19 +1368,55 @@ Final publication complete                               // meetings.notes
      ├── Text outside the block is preserved; changed mid-write -> not written
      └── Missing file -> manifest only
   -> Failure / timeout -> notes_error; Markdown untouched; recording stays Complete
-  -> OpenCode without a chosen model: the ranked models are cached per service;
-     any one failing drops the cache (the next call reads OpenCode's catalog
-     again), and all failing asks OpenCode's own default model, so a list read
-     while OpenCode was still loading no longer fails every call until a
-     restart (#1123; check: stale_ranked_models_fall_back_to_the_default_model)
+  -> OpenCode without a chosen model runs Auto's first three models (Notes
+     Model Auto) in turn; all failing, or none found, asks OpenCode's own
+     default model. Dictation rewriting keeps its ranked list, cached per
+     service; any one failing drops the cache (#1123; check:
+     stale_ranked_models_fall_back_to_the_default_model)
 
 Unavailable (not eligible / Apple Intelligence off / model not ready / macOS < 26)
   -> Settings row says why; nothing runs
-Meetings pane -> title in list and detail; Summary paragraph above the transcript;
-  "Summarize" / "Regenerate summary" / "Summarizing…" in the overflow menu
+Meetings pane -> title in list and detail; Summary paragraphs and Key points,
+  Decisions, Next steps, Open questions above the transcript; "Summarize" /
+  "Regenerate summary" / "Summarizing…" in the overflow menu; Copy summary
+  copies the whole notes block
 Transcript ready capsule -> "Ready · <title>" once a provisional or final title
-  exists; subtitle "Summarizing with Apple Intelligence…", then the summary
+  exists; subtitle "Summarizing with Apple Intelligence…", then the first
+  summary paragraph
 ```
+
+#### Notes Model Auto
+
+With Summaries on OpenCode and no model chosen ("Hex picks a fast model"),
+Auto picks the notes model by a rule over OpenCode's catalog, not a list of
+model names, so it follows new models without a Hex release:
+
+```ts
+Auto                                                // meetings.opencode_model unset
+├── keep: active, text in and out, an ID that names a fast tier
+│   (flash, lite, mini, nano, haiku), context of 64k tokens or unknown
+├── leave out: free, preview, exp, beta, vision, vl, audio, omni, image,
+│   tts, realtime, search, embedding, code, coder, codex
+├── order: opencode (Zen), then opencode-go, then any other provider;
+│   within one, the newest release, then the cheapest output
+└── run: the first 3 in turn within one deadline, each at its lowest
+    reasoning variant; none -> OpenCode's own default model
+```
+
+Rolling aliases such as `~deepseek/deepseek-flash-latest` pass the same rule,
+but only OpenRouter offers them, so they rank after managed OpenCode: notes
+never spend another account's credits while OpenCode's own can answer. Auto
+reads the catalog at most every five minutes and logs its picks as
+`automatic meeting summary models`. Before, an unchosen model ran dictation
+rewriting's fixed list (`RECOMMENDED_OPENCODE_MODELS`), tuned for strict
+paste-ready output rather than summaries, which on a workspace with OpenRouter
+started on `openrouter/google/gemini-3.1-flash-lite`. Observed 2026-11-08 on a
+catalog of 435 models (OpenCode Zen and Go, OpenRouter, Kiro):
+`opencode/claude-haiku-5-5`, `opencode/deepseek-v4.1-flash`,
+`opencode/gemini-3.8-flash`. A chosen model also runs at its lowest reasoning
+variant (`low`, then `minimal`, `none`, `medium`): the default high/max
+thinking spent the whole call deadline on a 24-minute transcript. Source:
+[meeting/generator/auto.rs](../../src/meeting/generator/auto.rs).
 
 Title rule: the shown title is the user's title unless it is still the default
 `<App> call — 2:30 PM` / `Meeting — 2:30 PM`; then the final notes title, else
@@ -1372,10 +1433,12 @@ Hex stops between the file rename and the manifest write, the manifest keeps
 the old path: Reveal falls back to the recording folder and the Markdown stays
 in the folder untouched.
 
-Action items and decisions are gone: other agents read the transcript for
-details (MCP). Older manifests still decode: a list summary is joined into one
-paragraph, and action items, decisions, and chunk counts are ignored (and
-dropped when that manifest is next written). Their Markdown copies keep their
+Older manifests still decode: a list summary is joined into one paragraph,
+legacy action items and decisions read into the new fields, and chunk counts
+are ignored (and dropped when that manifest is next written). `hex meetings
+show --json` adds `key_points`, `decisions`, `action_items`, and
+`open_questions` to its notes (additive to version 1), and MCP's `get_notes`
+returns the whole notes block with a line saying they are model-written. Their Markdown copies keep their
 old notes block until regenerated.
 
 Sources: [meeting/notes.rs](../../src/meeting/notes.rs),
@@ -1392,6 +1455,16 @@ model): `a_short_transcript_is_sent_whole_in_one_call`,
 `provisional_titles_use_the_title_prompt_over_the_transcript_so_far`,
 `generated_and_provisional_titles_replace_only_default_titles`,
 `older_notes_with_points_action_items_and_decisions_still_read`,
+`detailed_notes_keep_paragraphs_and_unassigned_actions`,
+`notes_are_written_in_the_meeting_language`, `notes_formats_choose_their_fields`,
+`apple_intelligence_writes_short_notes_over_the_small_excerpt`,
+`a_marker_inside_a_turn_does_not_count_as_the_notes_block`,
+`text_without_spaces_is_cut_on_a_character_boundary`,
+`only_a_leading_list_marker_is_removed`, `loose_answers_keep_their_notes` and
+`the_first_offered_preferred_variant_wins` (generator), the `auto_*` checks in
+`meeting::generator::auto::tests`, `catalog_reads_release_date_price_and_status`
+(processor), `meeting_notes_format_is_a_choice` (CLI),
+`meeting_json_carries_the_detailed_notes` (`hex meetings show --json`),
 `notes_are_inserted_above_the_transcript_and_regenerate_idempotently`, and
 `user_edits_outside_the_notes_block_are_preserved`; menu text in
 `meeting_menu_offers_one_action_per_state`. The recorder thread, manifest write,

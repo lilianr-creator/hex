@@ -474,9 +474,16 @@ fn meeting_row(meeting: &Meeting, now: u64) -> MeetingRow<'_> {
 }
 
 fn meeting_json(meeting: &Meeting, range: OffsetRange, now: u64) -> Result<serde_json::Value> {
-    let notes = meeting.manifest.notes.as_ref().map(|notes| serde_json::json!({
-        "title": notes.title, "summary": notes.summary, "generated_at_ms": notes.generated_at_ms,
-    }));
+    // Additive to version 1: the detailed fields are empty lists for older
+    // and Short notes.
+    let notes = meeting.manifest.notes.as_ref().map(|notes| {
+        serde_json::json!({
+            "title": notes.title, "summary": notes.summary,
+            "key_points": notes.key_points, "decisions": notes.decisions,
+            "action_items": notes.action_items, "open_questions": notes.open_questions,
+            "generated_at_ms": notes.generated_at_ms,
+        })
+    });
     let mut json = serde_json::json!({
         "version": 1, "meeting": meeting_row(meeting, now), "notes": notes,
         "entries": meeting.entries_in(range, now)?,

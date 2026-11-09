@@ -495,16 +495,6 @@ pub(crate) struct Generated {
     pub model: Option<Model>,
 }
 
-/// One generation from OpenCode's default ranked models, for work outside
-/// dictation such as meeting notes.
-pub(crate) fn generate_text(
-    prompt: &str,
-    deadline: Duration,
-    cancelled: &AtomicBool,
-) -> Result<Generated> {
-    generate_cancellable(prompt, None, deadline, cancelled)
-}
-
 /// One generation from exactly `model`, never another provider's: a failure
 /// is OpenCode's answer for that model (the meeting summary model).
 pub(crate) fn generate_text_with(
@@ -514,6 +504,18 @@ pub(crate) fn generate_text_with(
     cancelled: &AtomicBool,
 ) -> Result<Generated> {
     generate_cancellable(prompt, Some(model), deadline, cancelled)
+}
+
+/// One generation over `models` in order, the meeting summary's automatic
+/// choice: a failure tries the next, and with none given or none left,
+/// OpenCode's own default model answers. Never the dictation ranking.
+pub(crate) fn generate_text_among(
+    prompt: &str,
+    models: &[Model],
+    deadline: Duration,
+    cancelled: &AtomicBool,
+) -> Result<Generated> {
+    generate_on(prompt, None, Some(models), deadline, cancelled)
 }
 
 /// Runs one generation and reports it as a processing observation. The text is
@@ -541,12 +543,22 @@ fn generate_observed(
     (text, observation)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ModelChoice {
     pub key: String,
     pub name: String,
     pub provider: String,
     pub variants: Vec<String>,
+    /// Accepts and returns text; the notes picker's filter.
+    pub text: bool,
+    /// The model's context window, when the catalog reports one.
+    pub context: Option<u64>,
+    /// When the provider released the model, in Unix milliseconds.
+    pub released: Option<u64>,
+    /// Dollars per million output tokens, when the catalog prices the model.
+    pub output_cost: Option<f64>,
+    /// The catalog lists the model as active, not deprecated or in beta.
+    pub active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -660,10 +672,43 @@ struct ModelInfo {
     enabled: bool,
     capabilities: ModelCapabilities,
     variants: Vec<ModelVariant>,
+    #[serde(default)]
+    limit: ModelLimit,
+    #[serde(default)]
+    time: ModelTime,
+    /// One price, or a list of tiers whose first is the base price.
+    #[serde(default)]
+    cost: serde_json::Value,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+struct ModelTime {
+    #[serde(default)]
+    released: Option<u64>,
+}
+
+impl ModelInfo {
+    fn output_cost(&self) -> Option<f64> {
+        let price = match &self.cost {
+            serde_json::Value::Array(tiers) => tiers.first()?,
+            price => price,
+        };
+        price.get("output")?.as_f64()
+    }
+}
+
+#[derive(Clone, Default, Deserialize)]
+struct ModelLimit {
+    #[serde(default)]
+    context: Option<u64>,
 }
 
 #[derive(Clone, Deserialize)]
 struct ModelCapabilities {
+    #[serde(default)]
+    input: Vec<String>,
     output: Vec<String>,
 }
 
@@ -757,6 +802,13 @@ fn build_model_catalog(models: Vec<ModelInfo>, default: Option<ModelInfo>) -> Mo
         .filter(model_is_available)
         .filter_map(|model| {
             let key = format!("{}/{}", model.provider_id, model.id);
+            let text = model.capabilities.input.iter().any(|input| input == "text");
+            let context = model.limit.context;
+            let output_cost = model.output_cost();
+            let active = model
+                .status
+                .as_deref()
+                .is_none_or(|status| status == "active");
             seen.insert(key.clone()).then_some(ModelChoice {
                 key,
                 name: model.name,
@@ -766,6 +818,11 @@ fn build_model_catalog(models: Vec<ModelInfo>, default: Option<ModelInfo>) -> Mo
                     .into_iter()
                     .map(|variant| variant.id)
                     .collect(),
+                text,
+                context,
+                released: model.time.released,
+                output_cost,
+                active,
             })
         })
         .collect();
@@ -984,6 +1041,18 @@ fn generate_cancellable(
     deadline: Duration,
     cancelled: &AtomicBool,
 ) -> Result<Generated> {
+    generate_on(prompt, model, None, deadline, cancelled)
+}
+
+/// [`generate_cancellable`] over `fixed` candidates instead of the ranked
+/// catalog when given.
+fn generate_on(
+    prompt: &str,
+    model: Option<&Model>,
+    fixed: Option<&[Model]>,
+    deadline: Duration,
+    cancelled: &AtomicBool,
+) -> Result<Generated> {
     let started = Instant::now();
     let lock = crate::policy::Lock::OpenCodeProcessing;
     if crate::policy::Policy::current().locks(lock) {
@@ -1004,12 +1073,13 @@ fn generate_cancellable(
     generate_with_candidates(
         prompt,
         model,
-        || {
-            ranked_candidates_for(
+        || match fixed {
+            Some(models) => models.to_vec(),
+            None => ranked_candidates_for(
                 &service,
                 deadline.saturating_sub(started.elapsed()),
                 cancelled,
-            )
+            ),
         },
         forget_ranked_candidates,
         started,
@@ -1370,6 +1440,7 @@ mod tests {
             },
             ModelInfo {
                 capabilities: ModelCapabilities {
+                    input: Vec::new(),
                     output: vec!["image".into()],
                 },
                 ..model
@@ -1772,6 +1843,38 @@ mod tests {
     }
 
     #[test]
+    fn catalog_reads_release_date_price_and_status() {
+        let models: ModelsResponse = serde_json::from_str(
+            r#"{"data": [
+                {"id": "fast-flash", "providerID": "opencode", "name": "Fast Flash", "enabled": true,
+                 "capabilities": {"input": ["text"], "output": ["text"]}, "variants": [],
+                 "time": {"released": 1793923200000}, "status": "active",
+                 "cost": [{"input": 0.1, "output": 0.5, "cache": {"read": 0, "write": 0}}]},
+                {"id": "old-mini", "providerID": "opencode", "name": "Old Mini", "enabled": true,
+                 "capabilities": {"input": ["text"], "output": ["text"]}, "variants": [],
+                 "status": "deprecated", "cost": {"input": 1, "output": 4}},
+                {"id": "bare-nano", "providerID": "kiro", "name": "Bare Nano", "enabled": true,
+                 "capabilities": {"input": ["text"], "output": ["text"]}, "variants": []}
+            ]}"#,
+        )
+        .unwrap();
+        let catalog = build_model_catalog(models.data, None);
+        let model = |key: &str| catalog.models.iter().find(|m| m.key == key).unwrap();
+        let fast = model("opencode/fast-flash");
+        assert_eq!(
+            (fast.released, fast.output_cost, fast.active),
+            (Some(1_793_923_200_000), Some(0.5), true)
+        );
+        let old = model("opencode/old-mini");
+        assert_eq!((old.output_cost, old.active), (Some(4.0), false));
+        let bare = model("kiro/bare-nano");
+        assert_eq!(
+            (bare.released, bare.output_cost, bare.active),
+            (None, None, true)
+        );
+    }
+
+    #[test]
     fn model_catalog_ranks_recommended_models_and_selects_top_available_default_with_variant() {
         let model_info = |provider: &str, id: &str, name: &str, variants: &[&str]| ModelInfo {
             id: id.into(),
@@ -1779,12 +1882,17 @@ mod tests {
             name: name.into(),
             enabled: true,
             capabilities: ModelCapabilities {
+                input: vec!["text".into()],
                 output: vec!["text".into()],
             },
             variants: variants
                 .iter()
                 .map(|v| ModelVariant { id: (*v).into() })
                 .collect(),
+            limit: ModelLimit::default(),
+            time: ModelTime::default(),
+            cost: serde_json::Value::Null,
+            status: None,
         };
         let heavy_default = model_info("example", "heavy-agent", "Heavy Agent", &["high"]);
         let models = vec![

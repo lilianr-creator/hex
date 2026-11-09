@@ -121,6 +121,7 @@ pub enum Feature {
     AnnotateReplay,
     MeetingImport,
     MeetingDescriptiveFilenames,
+    DetailedMeetingNotes,
     MeetingLanguage,
     QuitClosesWindow,
     ExpireMeetingAudio,
@@ -129,7 +130,7 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 63] = [
         Self::Meetings,
         Self::VoiceFilter,
         Self::Playground,
@@ -187,6 +188,7 @@ impl Feature {
         Self::AnnotateReplay,
         Self::MeetingImport,
         Self::MeetingDescriptiveFilenames,
+        Self::DetailedMeetingNotes,
         Self::MeetingLanguage,
         Self::QuitClosesWindow,
         Self::ExpireMeetingAudio,
@@ -272,6 +274,7 @@ impl Feature {
             | Self::AnnotateReplay
             | Self::MeetingImport
             | Self::MeetingDescriptiveFilenames
+            | Self::DetailedMeetingNotes
             | Self::MeetingLanguage
             | Self::ExpireMeetingAudio
             | Self::NotchIndicator
@@ -344,6 +347,7 @@ impl Feature {
             | Self::TerminalPasteShortcut
             | Self::ReleaseNotesLink
             | Self::OpenCodeInWsl => 20261108,
+            Self::DetailedMeetingNotes => 20261109,
             Self::MeetingLanguage => 20261109,
         }
     }
@@ -444,6 +448,7 @@ impl Feature {
             | Self::MeetingNotesVocabulary
             | Self::MeetingFinishedEvent
             | Self::MeetingDescriptiveFilenames
+            | Self::DetailedMeetingNotes
             | Self::MeetingLanguage
             | Self::FollowLiveTranscript
             | Self::MoreCallApps
@@ -514,6 +519,7 @@ impl Feature {
             Self::AnnotateReplay => "annotate-replay",
             Self::MeetingImport => "meeting-import",
             Self::MeetingDescriptiveFilenames => "meeting-descriptive-filenames",
+            Self::DetailedMeetingNotes => "detailed-meeting-notes",
             Self::MeetingLanguage => "meeting-language",
             Self::QuitClosesWindow => "quit-closes-window",
             Self::ExpireMeetingAudio => "expire-meeting-audio",
@@ -582,6 +588,7 @@ impl Feature {
             Self::AnnotateReplay => "labs.annotate_replay",
             Self::MeetingImport => "labs.meeting_import",
             Self::MeetingDescriptiveFilenames => "labs.meeting_descriptive_filenames",
+            Self::DetailedMeetingNotes => "labs.detailed_meeting_notes",
             Self::MeetingLanguage => "labs.meeting_language",
             Self::QuitClosesWindow => "labs.quit_closes_window",
             Self::ExpireMeetingAudio => "labs.expire_meeting_audio",
@@ -654,6 +661,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay,
             Self::MeetingImport => settings.labs.meeting_import,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames,
+            Self::DetailedMeetingNotes => settings.labs.detailed_meeting_notes,
             Self::MeetingLanguage => settings.labs.meeting_language,
             Self::QuitClosesWindow => settings.labs.quit_closes_window,
             Self::ExpireMeetingAudio => settings.labs.expire_meeting_audio,
@@ -724,6 +732,7 @@ impl Feature {
             &mut labs.annotate_replay,
             &mut labs.meeting_import,
             &mut labs.meeting_descriptive_filenames,
+            &mut labs.detailed_meeting_notes,
             &mut labs.meeting_language,
             &mut labs.quit_closes_window,
             &mut labs.expire_meeting_audio,
@@ -794,6 +803,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay = on,
             Self::MeetingImport => settings.labs.meeting_import = on,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames = on,
+            Self::DetailedMeetingNotes => settings.labs.detailed_meeting_notes = on,
             Self::MeetingLanguage => settings.labs.meeting_language = on,
             Self::QuitClosesWindow => settings.labs.quit_closes_window = on,
             Self::ExpireMeetingAudio => settings.labs.expire_meeting_audio = on,
@@ -876,6 +886,8 @@ const CAPS_LOCK_SLOW_BLINK: u64 = TYPED_TEXT << 1;
 const OPENCODE_IN_WSL: u64 = CAPS_LOCK_SLOW_BLINK << 1;
 /// The next bit above OPENCODE_IN_WSL's switch.
 const MEETING_LANGUAGE: u64 = OPENCODE_IN_WSL << 1;
+/// The next bit above MEETING_LANGUAGE's switch.
+const DETAILED_MEETING_NOTES: u64 = MEETING_LANGUAGE << 1;
 
 /// This process's `labs` switches: unknown until settings load or one is
 /// first read.
@@ -1145,6 +1157,11 @@ pub fn meeting_descriptive_filenames() -> bool {
     on(MEETING_DESCRIPTIVE_FILENAMES) && Feature::MeetingDescriptiveFilenames.on_this_os()
 }
 
+/// OpenCode notes follow `meetings.notes_format` (read where notes are planned and where Settings shows Summary style).
+pub fn detailed_meeting_notes() -> bool {
+    on(DETAILED_MEETING_NOTES) && Feature::DetailedMeetingNotes.on_this_os()
+}
+
 /// Meetings may pin their language (read where a recording or an import starts, and where Settings shows Language).
 pub fn meeting_language() -> bool {
     on(MEETING_LANGUAGE) && Feature::MeetingLanguage.on_this_os()
@@ -1326,6 +1343,11 @@ fn encode_where(settings: &LabsSettings, reaches: impl Fn(Feature) -> bool) -> u
             Feature::MeetingDescriptiveFilenames,
             settings.meeting_descriptive_filenames,
             MEETING_DESCRIPTIVE_FILENAMES,
+        ),
+        (
+            Feature::DetailedMeetingNotes,
+            settings.detailed_meeting_notes,
+            DETAILED_MEETING_NOTES,
         ),
         (
             Feature::MeetingLanguage,
@@ -1853,6 +1875,16 @@ mod tests {
         assert_ne!(state & MEETING_LANGUAGE, 0);
         assert_eq!(state & CAPS_LOCK_SLOW_BLINK, 0);
         assert_eq!((state >> MINUTES_SHIFT) & MINUTES_MASK, 24 * 60);
+    }
+
+    #[test]
+    fn detailed_meeting_notes_is_its_own_bit_and_off_by_default() {
+        let mut labs = LabsSettings::default();
+        assert_eq!(encode_where(&labs, |_| true) & DETAILED_MEETING_NOTES, 0);
+        labs.detailed_meeting_notes = true;
+        let state = encode_where(&labs, |_| true);
+        assert_ne!(state & DETAILED_MEETING_NOTES, 0);
+        assert_eq!(state & MEETING_LANGUAGE, 0);
     }
 
     #[test]

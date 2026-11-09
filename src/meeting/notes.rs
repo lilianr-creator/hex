@@ -1,8 +1,8 @@
-//! Meeting titles and short summaries from the notes writer (`generator`:
-//! Apple Intelligence, or OpenCode when turned on). A
-//! provisional title is written while the meeting records; after final
-//! publication one call over a bounded excerpt writes the final title and a
-//! summary of at most two sentences. Agents read the transcript for detail.
+//! Meeting titles and notes from the notes writer (`generator`: Apple
+//! Intelligence, or OpenCode when turned on). A provisional title is written
+//! while the meeting records; after final publication one call over a bounded
+//! excerpt writes the final title, a multi-paragraph summary in the meeting's
+//! language, key points, decisions, action items, and open questions.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,7 +13,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
+
+mod clean;
+mod render;
+
+pub(crate) use clean::*;
+pub(crate) use render::*;
 
 use super::generator::{self, GeneratedNotes, GenerationError, NotesWriter};
 use super::{
@@ -31,17 +37,27 @@ const FALLBACK_CONTEXT_TOKENS: usize = 4_096;
 /// Prompt size bounds latency more than the context does: about 3,000
 /// tokens of transcript keeps one call near four seconds on an M2 Max.
 const FINAL_EXCERPT_CHARS: usize = 12_000;
+/// A remote model writing Standard or Detailed notes reads more of a long
+/// meeting, so actions from its middle are not skipped.
+const DETAILED_EXCERPT_CHARS: usize = 48_000;
 const TITLE_EXCERPT_CHARS: usize = 5_000;
 /// Long turns are split so a monologue can still be sampled.
 const LINE_CHARS: usize = 600;
 const GAP_MARKER: &str = "[…]";
-const TOTAL_DEADLINE: Duration = Duration::from_secs(90);
-const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const TOTAL_DEADLINE: Duration = Duration::from_secs(180);
+const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 const TITLE_TIMEOUT: Duration = Duration::from_secs(30);
 const DICTATION_WAIT: Duration = Duration::from_secs(30);
 const MAX_TITLE_WORDS: usize = 8;
-const MAX_SUMMARY_SENTENCES: usize = 2;
-const MAX_SUMMARY_CHARS: usize = 400;
+const MAX_SUMMARY_PARAGRAPHS: usize = 8;
+const MAX_SUMMARY_CHARS: usize = 4_000;
+const MAX_SHORT_SUMMARY_SENTENCES: usize = 2;
+const MAX_SHORT_SUMMARY_CHARS: usize = 400;
+const MAX_KEY_POINTS: usize = 8;
+const MAX_DECISIONS: usize = 5;
+const MAX_ACTIONS: usize = 12;
+const MAX_OPEN_QUESTIONS: usize = 5;
+const MAX_ITEM_CHARS: usize = 300;
 
 /// Provisional titles: the first once the opening has enough speech, one
 /// refresh ten minutes in, and at most three attempts in all.
@@ -56,25 +72,68 @@ const TITLE_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 pub(super) const NOTES_START: &str = "<!-- hex:notes -->";
 pub(super) const NOTES_END: &str = "<!-- /hex:notes -->";
 
-const NOTES_INSTRUCTIONS: &str = "You title and summarize meeting transcripts. Each line starts \
-with a timestamp and a speaker label: You is the person who recorded the meeting, and Them is \
-one or more other participants. A long meeting is excerpted, and […] marks skipped parts. Write \
-one short, specific title for the whole meeting and a summary of at most two short sentences \
-on the main topics and outcomes. Use only what the transcript says; never invent names, dates, \
-or numbers.";
+const SHORT_NOTES_INSTRUCTIONS: &str = "You title and summarize meeting transcripts. Each line \
+starts with a timestamp and a speaker label: You is the person who \
+recorded the meeting, and Them is one or more other participants. A long \
+meeting is excerpted, and […] marks skipped parts. Write one short, specific title for the whole \
+meeting and a summary of at most two short sentences on the main topics and outcomes. Leave \
+key_points, decisions, action_items, and open_questions empty. Use only what the transcript says; \
+never invent names, dates, or numbers. Write the title and summary in the same language as the \
+transcript.";
+
+const STANDARD_NOTES_INSTRUCTIONS: &str = "You write meeting minutes. Each line starts with a \
+timestamp and a speaker label: You is the person who \
+recorded the meeting, and Them is one or more other participants. A long meeting is \
+excerpted, and […] marks skipped parts. Use only what the transcript says; never invent names, \
+dates, numbers, owners, or deadlines. Write one short, specific title for the whole meeting. \
+Write the summary as three to five short paragraphs that cover the context, the main topics, the \
+decisions, and the outcomes. List the key points and the decisions separately. Leave action_items \
+and open_questions empty. Write the title, summary, points, and decisions in the same language as \
+the transcript.";
+
+const DETAILED_NOTES_INSTRUCTIONS: &str = "You write meeting minutes. Each line starts with a \
+timestamp and a speaker label: You is the person who \
+recorded the meeting, and Them is one or more other participants. A long meeting is \
+excerpted, and […] marks skipped parts. Use only what the transcript says; never invent names, \
+dates, numbers, owners, or deadlines. Write one short, specific title for the whole meeting. \
+Write the summary as three to six short paragraphs that cover the context, the main topics, the \
+decisions, and the outcomes; do not repeat action items in it. List the key points, the \
+decisions, and open questions separately. List every task that someone explicitly agreed to do \
+as an action item, with owner, due date, transcript timestamp, and a short supporting quote when \
+the transcript gives them. Set owner to You only when the person who recorded the meeting \
+committed, and otherwise leave it null. Write the title, summary, points, decisions, action items, and questions \
+in the same language as the transcript.";
+
+fn notes_instructions(format: crate::app_settings::MeetingNotesFormat) -> &'static str {
+    use crate::app_settings::MeetingNotesFormat;
+    match format {
+        MeetingNotesFormat::Short => SHORT_NOTES_INSTRUCTIONS,
+        MeetingNotesFormat::Standard => STANDARD_NOTES_INSTRUCTIONS,
+        MeetingNotesFormat::Detailed => DETAILED_NOTES_INSTRUCTIONS,
+    }
+}
 
 const TITLE_INSTRUCTIONS: &str = "You name meetings from the first part of their transcript. \
-Each line starts with a timestamp and a speaker label: You is the person who recorded the \
-meeting, and Them is one or more other participants. Write one short, specific title naming \
+Each line starts with a timestamp and a speaker label: You is the person who \
+recorded the meeting, and Them is one or more other participants. Write one short, specific title naming \
 the main topic. Use only what the transcript says.";
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MeetingNotes {
     pub title: String,
-    /// At most two sentences. Older manifests stored a list of points, and
-    /// action items and decisions, which are read as joined text or ignored.
+    /// The overview, as one or more paragraphs in the meeting's language.
+    /// Older manifests stored a list of points, and action items and
+    /// decisions, which are read as joined text or ignored.
     #[serde(default, deserialize_with = "summary_text")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_points: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action_items: Vec<ActionItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<String>,
     #[serde(default)]
     pub generated_at_ms: u64,
     #[serde(default)]
@@ -95,25 +154,73 @@ impl MeetingNotes {
     pub fn excerpted(&self) -> bool {
         self.excerpt_chars < self.transcript_chars
     }
+
+    /// The notes as plain text, for search and copy fallbacks.
+    pub fn plain_text(&self) -> String {
+        let mut parts = vec![self.title.trim().to_owned(), self.summary.trim().to_owned()];
+        parts.extend(self.key_points.iter().map(|point| point.trim().to_owned()));
+        parts.extend(
+            self.decisions
+                .iter()
+                .map(|decision| decision.trim().to_owned()),
+        );
+        parts.extend(self.action_items.iter().map(ActionItem::plain_text));
+        parts.extend(
+            self.open_questions
+                .iter()
+                .map(|question| question.trim().to_owned()),
+        );
+        parts
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
-fn summary_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Summary {
-        Text(String),
-        Points(Vec<String>),
+/// One follow-up task from a meeting. `owner` is only set when the
+/// transcript names one; `at` and `quote` point back into the transcript.
+///
+/// Models answer loosely: `null` for a field they were told to leave empty,
+/// a number for a timestamp. Every field reads leniently, and an item
+/// without a task is dropped when the notes are cleaned.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActionItem {
+    #[serde(default, deserialize_with = "loose_text")]
+    pub owner: Option<String>,
+    #[serde(default, deserialize_with = "text_or_null")]
+    pub task: String,
+    #[serde(default, deserialize_with = "loose_text")]
+    pub due: Option<String>,
+    #[serde(default, deserialize_with = "loose_text")]
+    pub at: Option<String>,
+    #[serde(default, deserialize_with = "loose_text")]
+    pub quote: Option<String>,
+}
+
+impl ActionItem {
+    /// `owner: task (due: …) [at]`, with `unassigned` for an item nobody
+    /// took, in the caller's words (the pane translates them).
+    pub fn line(&self, unassigned: &str, due_label: &str) -> String {
+        let owner = self
+            .owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())
+            .unwrap_or(unassigned);
+        let mut text = format!("{owner}: {}", self.task.trim());
+        if let Some(due) = self.due.as_deref().filter(|due| !due.trim().is_empty()) {
+            text.push_str(&format!(" ({due_label} {})", due.trim()));
+        }
+        if let Some(at) = self.at.as_deref().filter(|at| !at.trim().is_empty()) {
+            text.push_str(&format!(" [{}]", at.trim()));
+        }
+        text
     }
-    Ok(match Option::<Summary>::deserialize(deserializer)? {
-        Some(Summary::Text(text)) => text,
-        Some(Summary::Points(points)) => points
-            .iter()
-            .map(|point| point.trim())
-            .filter(|point| !point.is_empty())
-            .collect::<Vec<_>>()
-            .join(" "),
-        None => String::new(),
-    })
+
+    fn plain_text(&self) -> String {
+        self.line("Unassigned", "due:")
+    }
 }
 
 /// Characters of transcript one prompt may carry for a context window.
@@ -245,6 +352,7 @@ pub(super) struct Summary {
 /// One call over a bounded excerpt. A prompt that still exceeds the context
 /// is retried once with half the excerpt; every call receives the time left
 /// before `deadline`.
+#[cfg(any(debug_assertions, test))]
 pub(super) fn summarize_entries(
     entries: &[TranscriptEntry],
     max_chars: usize,
@@ -252,6 +360,21 @@ pub(super) fn summarize_entries(
     generate: impl FnMut(&str, &str, Duration) -> Result<GeneratedNotes, GenerationError>,
 ) -> Result<Summary> {
     summarize_with_calendar(entries, None, &[], max_chars, deadline, generate)
+}
+
+/// The meeting language, when it was fixed. `auto` and `None` ask the model
+/// to use the transcript's own language.
+fn language_preamble(language: Option<&str>) -> String {
+    match language {
+        Some(code) if code != crate::transcription::models::AUTO_LANGUAGE => format!(
+            "Meeting language: {} ({}). Write every field in this language.\n\n",
+            crate::transcription::models::language_name(code),
+            code
+        ),
+        // The instructions already ask for the transcript's language; an
+        // empty preamble keeps older prompts and tests unchanged.
+        _ => String::new(),
+    }
 }
 
 /// The most attendee names a notes prompt lists.
@@ -288,17 +411,44 @@ fn calendar_preamble(calendar: Option<&super::MeetingCalendar>) -> String {
 /// [`summarize_entries`] with the vocabulary's `terms` (Labs › Vocabulary
 /// in meeting notes; empty leaves them out) and the calendar event as
 /// context. Both count against the excerpt budget.
+#[cfg(any(debug_assertions, test))]
 pub(super) fn summarize_with_calendar(
     entries: &[TranscriptEntry],
     calendar: Option<&super::MeetingCalendar>,
     terms: &[String],
     max_chars: usize,
     deadline: Instant,
+    generate: impl FnMut(&str, &str, Duration) -> Result<GeneratedNotes, GenerationError>,
+) -> Result<Summary> {
+    summarize_with_calendar_in(
+        entries,
+        calendar,
+        terms,
+        None,
+        crate::app_settings::MeetingNotesFormat::Detailed,
+        max_chars,
+        deadline,
+        generate,
+    )
+}
+
+/// [`summarize_with_calendar`] with the meeting's fixed language and the
+/// chosen amount of detail.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn summarize_with_calendar_in(
+    entries: &[TranscriptEntry],
+    calendar: Option<&super::MeetingCalendar>,
+    terms: &[String],
+    language: Option<&str>,
+    format: crate::app_settings::MeetingNotesFormat,
+    max_chars: usize,
+    deadline: Instant,
     mut generate: impl FnMut(&str, &str, Duration) -> Result<GeneratedNotes, GenerationError>,
 ) -> Result<Summary> {
     let preamble = format!(
-        "{}{}",
+        "{}{}{}",
         super::chapters::vocabulary_line(terms),
+        language_preamble(language),
         calendar_preamble(calendar)
     );
     let mut max_chars = max_chars.saturating_sub(preamble.len()).max(1);
@@ -314,12 +464,36 @@ pub(super) fn summarize_with_calendar(
         }
         calls += 1;
         let prompt = format!("{preamble}Meeting transcript:\n\n{}", excerpt.text);
-        match generate(NOTES_INSTRUCTIONS, &prompt, remaining.min(CALL_TIMEOUT)) {
+        match generate(
+            notes_instructions(format),
+            &prompt,
+            remaining.min(CALL_TIMEOUT),
+        ) {
             Ok(notes) => {
+                use crate::app_settings::MeetingNotesFormat;
+                let (key_points, decisions, action_items, open_questions) = match format {
+                    MeetingNotesFormat::Short => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+                    MeetingNotesFormat::Standard => (
+                        clean_list(notes.key_points, MAX_KEY_POINTS),
+                        clean_list(notes.decisions, MAX_DECISIONS),
+                        Vec::new(),
+                        Vec::new(),
+                    ),
+                    MeetingNotesFormat::Detailed => (
+                        clean_list(notes.key_points, MAX_KEY_POINTS),
+                        clean_list(notes.decisions, MAX_DECISIONS),
+                        clean_action_items(notes.action_items),
+                        clean_list(notes.open_questions, MAX_OPEN_QUESTIONS),
+                    ),
+                };
                 return Ok(Summary {
                     notes: GeneratedNotes {
                         title: clean_title(&notes.title),
-                        summary: clean_summary(&notes.summary),
+                        summary: clean_summary(&notes.summary, format),
+                        key_points,
+                        decisions,
+                        action_items,
+                        open_questions,
                         written_by: notes.written_by,
                     },
                     excerpt_chars: excerpt.text.len(),
@@ -333,58 +507,15 @@ pub(super) fn summarize_with_calendar(
     }
 }
 
-pub(super) fn clean_title(title: &str) -> String {
-    let words = title
-        .trim()
-        .trim_matches(['"', '\'', '“', '”', '#', '*'])
-        .split_whitespace()
-        .take(MAX_TITLE_WORDS)
-        .collect::<Vec<_>>()
-        .join(" ");
-    words.trim_end_matches(['.', ':', ';', ',']).to_string()
-}
-
-/// One paragraph of at most two sentences and `MAX_SUMMARY_CHARS`.
-fn clean_summary(summary: &str) -> String {
-    let text = summary
-        .split_whitespace()
-        .map(|word| word.trim_start_matches(['-', '*', '•']))
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    // Guided generation sometimes leaks a closing brace from its JSON.
-    let text = text
-        .trim_start_matches(['{', '['])
-        .trim_end_matches(['}', ']'])
-        .trim();
-    let mut end = text.len();
-    let mut sentences = 0;
-    for (index, character) in text.char_indices() {
-        if matches!(character, '.' | '!' | '?')
-            && text[index + 1..].starts_with(|next: char| next.is_whitespace())
-        {
-            sentences += 1;
-            if sentences == MAX_SUMMARY_SENTENCES {
-                end = index + 1;
-                break;
-            }
-        }
-    }
-    let text = &text[..end];
-    if text.len() <= MAX_SUMMARY_CHARS {
-        return text.into();
-    }
-    let cut = text[..text.floor_char_boundary(MAX_SUMMARY_CHARS)]
-        .rfind(' ')
-        .unwrap_or(MAX_SUMMARY_CHARS);
-    format!("{}…", text[..cut].trim_end_matches([',', ';', ':']))
-}
-
 impl MeetingNotes {
     fn from_summary(summary: Summary, elapsed: Duration) -> Self {
         Self {
             title: summary.notes.title,
             summary: summary.notes.summary,
+            key_points: summary.notes.key_points,
+            decisions: summary.notes.decisions,
+            action_items: summary.notes.action_items,
+            open_questions: summary.notes.open_questions,
             generated_at_ms: now_ms(),
             elapsed_ms: elapsed.as_millis() as u64,
             excerpt_chars: summary.excerpt_chars,
@@ -430,36 +561,6 @@ fn base_title(manifest: &MeetingManifest) -> String {
                 .filter(|title| !title.is_empty())
         })
         .map_or_else(|| manifest.title.clone(), str::to_owned)
-}
-
-pub(super) fn render_notes_block(notes: &MeetingNotes) -> String {
-    let summary = notes.summary.trim();
-    format!(
-        "{NOTES_START}\n## Summary\n\n{}\n\n_{}_\n{NOTES_END}\n",
-        if summary.is_empty() {
-            "_Nothing to summarize._"
-        } else {
-            summary
-        },
-        notes_footer(notes.written_by.as_ref()),
-    )
-}
-
-/// The line under the summary, naming the writer that actually wrote it.
-fn notes_footer(writer: Option<&NotesWriter>) -> String {
-    const DETAILS: &str = "the transcript below has the details.";
-    match writer {
-        Some(NotesWriter::AppleIntelligence) => {
-            format!("Written on this Mac by Apple Intelligence; {DETAILS}")
-        }
-        Some(NotesWriter::OpenCode { model: Some(model) }) => {
-            format!("Written by {model} through OpenCode; {DETAILS}")
-        }
-        Some(NotesWriter::OpenCode { model: None }) => {
-            format!("Written by OpenCode's default model; {DETAILS}")
-        }
-        None => "The transcript below has the details.".into(),
-    }
 }
 
 /// How far a recording has come, for deciding when to name it.
@@ -638,73 +739,6 @@ pub(super) fn provisional_title(
     Ok(title)
 }
 
-/// Rewrites only Hex's parts of the Markdown: the heading when it still
-/// reads `previous_title`, and the notes block between its markers (inserted
-/// above `## Transcript` the first time). Everything else is preserved.
-pub(super) fn apply_notes(
-    markdown: &str,
-    previous_title: &str,
-    title: &str,
-    block: &str,
-) -> String {
-    let mut output = String::with_capacity(markdown.len() + block.len());
-    let mut lines = markdown.split_inclusive('\n').peekable();
-    let mut heading_seen = false;
-    let mut inserted = false;
-    let has_markers = markdown.contains(NOTES_START) && markdown.contains(NOTES_END);
-    while let Some(line) = lines.next() {
-        let bare = line.trim_end_matches(['\n', '\r']);
-        if !heading_seen && bare.starts_with("# ") {
-            heading_seen = true;
-            if bare[2..].trim() == previous_title.trim() {
-                output.push_str(&format!("# {}\n", title.trim()));
-                continue;
-            }
-        }
-        if !inserted && has_markers && bare == NOTES_START {
-            for skipped in lines.by_ref() {
-                if skipped.trim_end_matches(['\n', '\r']) == NOTES_END {
-                    break;
-                }
-            }
-            output.push_str(block);
-            inserted = true;
-            continue;
-        }
-        if !inserted && !has_markers && bare == "## Transcript" {
-            output.push_str(block);
-            output.push('\n');
-            inserted = true;
-        }
-        output.push_str(line);
-    }
-    if !inserted {
-        if !output.is_empty() && !output.ends_with("\n\n") {
-            output.push_str(if output.ends_with('\n') { "\n" } else { "\n\n" });
-        }
-        output.push_str(block);
-    }
-    output
-}
-
-/// Replaces the first heading only while it still reads `previous_title`.
-pub(super) fn apply_title(markdown: &str, previous_title: &str, title: &str) -> String {
-    let mut output = String::with_capacity(markdown.len() + title.len());
-    let mut heading_seen = false;
-    for line in markdown.split_inclusive('\n') {
-        let bare = line.trim_end_matches(['\n', '\r']);
-        if !heading_seen && bare.starts_with("# ") {
-            heading_seen = true;
-            if bare[2..].trim() == previous_title.trim() {
-                output.push_str(&format!("# {}\n", title.trim()));
-                continue;
-            }
-        }
-        output.push_str(line);
-    }
-    output
-}
-
 /// Renames the exported file's heading in place, under the same rule as
 /// generated titles.
 pub(super) fn retitle_markdown_file(
@@ -880,11 +914,17 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
         Vec::new()
     };
     let started = Instant::now();
-    let result = summarize_with_calendar(
+    let (format, cap) = notes_plan(
+        generator::opencode_writes(),
+        crate::app_settings::meeting_notes_format(),
+    );
+    let result = summarize_with_calendar_in(
         &entries,
         manifest.calendar.as_ref(),
         &terms,
-        excerpt_budget(generator::context_tokens(), FINAL_EXCERPT_CHARS),
+        manifest.language.as_deref(),
+        format,
+        excerpt_budget(generator::context_tokens(), cap),
         started + TOTAL_DEADLINE,
         |instructions, prompt, timeout| {
             wait_for_dictation(&never);
@@ -904,7 +944,8 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
                 "generated meeting notes"
             );
             let previous_title = display_title(&manifest);
-            manifest.notes = Some(MeetingNotes::from_summary(summary, started.elapsed()));
+            let notes = MeetingNotes::from_summary(summary, started.elapsed());
+            manifest.notes = Some(notes);
             manifest.notes_error = None;
             let title = display_title(&manifest);
             if let Err(error) = apply_notes_to_export(
@@ -925,6 +966,24 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
             write_manifest(&directory, &manifest)?;
             Err(error)
         }
+    }
+}
+
+/// The format and excerpt cap the writer can serve. Apple Intelligence's
+/// schema holds a title and at most two sentences, and its latency grows
+/// with the prompt, so it always writes Short notes over the smaller
+/// excerpt; a remote model reads more of a long meeting for Standard and
+/// Detailed notes.
+fn notes_plan(
+    opencode: bool,
+    requested: crate::app_settings::MeetingNotesFormat,
+) -> (crate::app_settings::MeetingNotesFormat, usize) {
+    use crate::app_settings::MeetingNotesFormat;
+    match (opencode, requested) {
+        (true, MeetingNotesFormat::Short) | (false, _) => {
+            (MeetingNotesFormat::Short, FINAL_EXCERPT_CHARS)
+        }
+        (true, format) => (format, DETAILED_EXCERPT_CHARS),
     }
 }
 
@@ -1133,7 +1192,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(summary.calls, 1);
-        assert_eq!(prompts[0].0, NOTES_INSTRUCTIONS);
+        assert_eq!(
+            prompts[0].0,
+            notes_instructions(crate::app_settings::MeetingNotesFormat::Detailed)
+        );
         assert!(
             prompts[0]
                 .1
@@ -1147,7 +1209,7 @@ mod tests {
         assert_eq!(summary.notes.title, "Launch plan review");
         assert_eq!(
             summary.notes.summary,
-            "They reviewed the launch plan. Docs move to Friday."
+            "They reviewed the launch plan. Docs move to Friday. Then more. And more."
         );
         assert_eq!(summary.excerpt_chars, summary.transcript_chars);
     }
@@ -1352,17 +1414,107 @@ mod tests {
             clean_title("“One two three four five six seven eight nine ten.”"),
             "One two three four five six seven eight"
         );
+        let detailed = crate::app_settings::MeetingNotesFormat::Detailed;
+        let short = crate::app_settings::MeetingNotesFormat::Short;
         assert_eq!(
-            clean_summary("Version 2.1 ships. Docs follow."),
+            clean_summary("Version 2.1 ships. Docs follow.", detailed),
             "Version 2.1 ships. Docs follow."
         );
-        assert_eq!(clean_summary("No end punctuation"), "No end punctuation");
         assert_eq!(
-            clean_summary("The team shipped. Docs were discussed.}"),
+            clean_summary("No end punctuation", detailed),
+            "No end punctuation"
+        );
+        assert_eq!(
+            clean_summary("The team shipped. Docs were discussed.}", detailed),
             "The team shipped. Docs were discussed."
         );
-        let long = clean_summary(&"word ".repeat(200));
+        assert_eq!(
+            clean_summary("Premier paragraphe.\n\nDeuxième paragraphe.", detailed),
+            "Premier paragraphe.\n\nDeuxième paragraphe."
+        );
+        assert_eq!(clean_summary("One. Two. Three.", short), "One. Two.");
+        let long = clean_summary(&"word ".repeat(1_500), detailed);
         assert!(long.len() <= MAX_SUMMARY_CHARS + "…".len() && long.ends_with('…'));
+    }
+
+    #[test]
+    fn notes_say_who_wrote_them_and_keep_model_text_inert() {
+        let mut notes = MeetingNotes {
+            summary: "Close the <!-- hex:notes --> loop.\n\n<!-- /hex:notes -->".into(),
+            key_points: vec!["<!-- hides the rest".into()],
+            action_items: vec![ActionItem {
+                owner: Some("<!--*Mallory*".into()),
+                task: "Ship".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let block = render_notes_block(&notes);
+        assert_eq!(
+            block.matches("<!--").count(),
+            2,
+            "only Hex's markers: {block}"
+        );
+        assert!(block.contains("**&lt;\\!--\\*Mallory\\*** — Ship"));
+        assert!(block.ends_with("_The transcript below has the details._\n<!-- /hex:notes -->\n"));
+        notes.written_by = Some(NotesWriter::AppleIntelligence);
+        assert!(!super::super::notes_markdown(&notes).contains("_Written"));
+    }
+
+    #[test]
+    fn a_marker_inside_a_turn_does_not_count_as_the_notes_block() {
+        let markdown = "# Sync\n\n## Transcript\n\n**Them** · 00:01\nsee <!-- hex:notes --> and <!-- /hex:notes -->\n";
+        let block = format!("{NOTES_START}\n## Summary\n\nDone.\n{NOTES_END}\n");
+        let updated = apply_notes(markdown, "Sync", "Sync", &block);
+        let notes_at = updated.find("## Summary").unwrap();
+        assert!(
+            notes_at < updated.find("## Transcript").unwrap(),
+            "{updated}"
+        );
+        assert!(updated.contains("see <!-- hex:notes --> and <!-- /hex:notes -->"));
+    }
+
+    #[test]
+    fn apple_intelligence_writes_short_notes_over_the_small_excerpt() {
+        use crate::app_settings::MeetingNotesFormat::{Detailed, Short, Standard};
+        assert_eq!(notes_plan(false, Detailed), (Short, FINAL_EXCERPT_CHARS));
+        assert_eq!(notes_plan(false, Standard), (Short, FINAL_EXCERPT_CHARS));
+        assert_eq!(notes_plan(true, Short), (Short, FINAL_EXCERPT_CHARS));
+        assert_eq!(
+            notes_plan(true, Detailed),
+            (Detailed, DETAILED_EXCERPT_CHARS)
+        );
+    }
+
+    #[test]
+    fn text_without_spaces_is_cut_on_a_character_boundary() {
+        let detailed = crate::app_settings::MeetingNotesFormat::Detailed;
+        let short = crate::app_settings::MeetingNotesFormat::Short;
+        // Japanese and Chinese have no spaces; three bytes per character
+        // never land on the byte limits.
+        let japanese = "会議の結論".repeat(2_000);
+        for summary in [
+            clean_summary(&japanese, detailed),
+            clean_summary(&japanese, short),
+            clean_item(&japanese),
+        ] {
+            assert!(summary.ends_with('…'));
+            assert!(summary.starts_with("会議の結論"));
+        }
+        assert!(clean_item(&japanese).len() <= MAX_ITEM_CHARS + "…".len());
+    }
+
+    #[test]
+    fn only_a_leading_list_marker_is_removed() {
+        let detailed = crate::app_settings::MeetingNotesFormat::Detailed;
+        assert_eq!(clean_item("- Ship it"), "Ship it");
+        assert_eq!(clean_item("•Ship it"), "Ship it");
+        assert_eq!(clean_item("-15 % on the budget"), "-15 % on the budget");
+        assert_eq!(clean_item("**Alice** owns it"), "**Alice** owns it");
+        assert_eq!(
+            clean_summary("- First point\n- Costs fell -15 %.", detailed),
+            "First point Costs fell -15 %."
+        );
     }
 
     #[test]
@@ -1436,6 +1588,102 @@ mod tests {
             summary: "They agreed to ship v2 on Friday.".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn detailed_notes_keep_paragraphs_and_unassigned_actions() {
+        let mut notes = meeting_notes();
+        notes.summary = "Premier paragraphe.\n\nDeuxième paragraphe.".into();
+        notes.key_points = vec!["Un point clé".into()];
+        notes.action_items = vec![crate::meeting::ActionItem {
+            owner: None,
+            task: "Faire X".into(),
+            due: Some("demain".into()),
+            at: Some("01:00".into()),
+            quote: None,
+        }];
+        let block = render_notes_block(&notes);
+        assert!(block.contains("Premier paragraphe.\n\nDeuxième paragraphe."));
+        assert!(block.contains("### Key points\n\n- Un point clé"));
+        assert!(block.contains("### Next steps"));
+        assert!(block.contains("**Unassigned** — Faire X (due: demain) [01:00]"));
+    }
+
+    #[test]
+    fn notes_are_written_in_the_meeting_language() {
+        let mut prompts = Vec::new();
+        summarize_with_calendar_in(
+            &conversation(2),
+            None,
+            &[],
+            Some("fr"),
+            crate::app_settings::MeetingNotesFormat::Detailed,
+            8_000,
+            Instant::now() + Duration::from_secs(30),
+            |_, prompt, _| {
+                prompts.push(prompt.to_string());
+                Ok(generated("Titre", "Résumé.\n\nDeuxième paragraphe."))
+            },
+        )
+        .unwrap();
+        assert!(
+            prompts[0]
+                .starts_with("Meeting language: French (fr). Write every field in this language."),
+            "{}",
+            prompts[0]
+        );
+    }
+
+    #[test]
+    fn notes_formats_choose_their_fields() {
+        use crate::app_settings::MeetingNotesFormat;
+        let detailed_notes = || GeneratedNotes {
+            title: "Titre".into(),
+            summary: "Un. Deux. Trois. Quatre.".into(),
+            key_points: vec!["Point".into()],
+            decisions: vec!["Décision".into()],
+            action_items: vec![crate::meeting::ActionItem {
+                owner: Some("You".into()),
+                task: "Faire X".into(),
+                ..Default::default()
+            }],
+            open_questions: vec!["Question".into()],
+            written_by: None,
+        };
+        let run = |format| {
+            summarize_with_calendar_in(
+                &conversation(2),
+                None,
+                &[],
+                Some("fr"),
+                format,
+                8_000,
+                Instant::now() + Duration::from_secs(30),
+                |_, _, _| Ok(detailed_notes()),
+            )
+            .unwrap()
+            .notes
+        };
+
+        let detailed = run(MeetingNotesFormat::Detailed);
+        assert_eq!(detailed.key_points, ["Point"]);
+        assert_eq!(detailed.decisions, ["Décision"]);
+        assert_eq!(detailed.action_items.len(), 1);
+        assert_eq!(detailed.open_questions, ["Question"]);
+
+        let standard = run(MeetingNotesFormat::Standard);
+        assert_eq!(standard.key_points, ["Point"]);
+        assert_eq!(standard.decisions, ["Décision"]);
+        assert!(standard.action_items.is_empty() && standard.open_questions.is_empty());
+
+        let short = run(MeetingNotesFormat::Short);
+        assert_eq!(short.summary, "Un. Deux.");
+        assert!(
+            short.key_points.is_empty()
+                && short.decisions.is_empty()
+                && short.action_items.is_empty()
+                && short.open_questions.is_empty()
+        );
     }
 
     const EXPORT: &str = "# Zoom call — 2:30 PM\n\n- **Date:** Thursday, October 15, 2026, 2:30 PM\n\n## Transcript\n\n**You** · 00:01\nHi.\n\n**Them** · 00:04\nHello.\n\n";
@@ -1563,9 +1811,13 @@ mod tests {
             notes.summary,
             "Dax proposed scheduled sessions. They agreed to try it."
         );
+        assert_eq!(notes.action_items.len(), 1);
+        assert_eq!(notes.action_items[0].task, "Write the spec");
+        assert_eq!(notes.action_items[0].owner.as_deref(), Some("You"));
+        assert_eq!(notes.decisions, ["Ship next week."]);
         assert!(!notes.excerpted());
         let written = serde_json::to_value(&notes).unwrap();
-        assert!(written.get("action_items").is_none());
+        assert!(written.get("action_items").is_some());
     }
 
     #[test]
@@ -1590,13 +1842,13 @@ mod tests {
                     source: MeetingSource::Microphone,
                     start_ms: 1_000,
                     end_ms: 4_000,
-                    text: "Hi.".into()
+                    text: "Hi.".into(),
                 },
                 TranscriptEntry {
                     source: MeetingSource::System,
                     start_ms: 4_000,
                     end_ms: 4_400,
-                    text: "Hello.".into()
+                    text: "Hello.".into(),
                 },
             ]
         );

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::meetings::{Chapter, Meeting, Status, Transcript, Turn};
+use super::meetings::{Chapter, Meeting, NotesView, Status, Transcript, Turn};
 #[cfg(not(target_os = "macos"))]
 use super::platform::MeetingRequest;
 #[cfg(not(target_os = "macos"))]
@@ -161,11 +161,16 @@ fn pane_meeting(
         clock: crate::meeting::clock(meeting.start_ms()),
         duration_ms: meeting.duration_ms(now_ms),
         app: manifest.app.clone(),
-        summary: manifest
-            .notes
-            .as_ref()
-            .map(|notes| notes.summary.clone())
-            .filter(|summary| !summary.is_empty()),
+        notes: manifest.notes.as_ref().and_then(|notes| {
+            let notes = NotesView {
+                summary: notes.summary.clone(),
+                key_points: notes.key_points.clone(),
+                decisions: notes.decisions.clone(),
+                action_items: notes.action_items.clone(),
+                open_questions: notes.open_questions.clone(),
+            };
+            (!notes.plain_text().trim().is_empty()).then_some(notes)
+        }),
         notes_running: crate::meeting::notes_in_progress(&meeting.id),
         reveal: crate::meeting::RevealTarget::for_meeting(manifest, &folder),
         folder,

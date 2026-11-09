@@ -555,6 +555,11 @@ const KEYS: &[Key] = &[
         "Labs: an exported meeting's Markdown follows its title once notes or a rename provide one, keeping the date and time",
     ),
     key(
+        "labs.detailed_meeting_notes",
+        Kind::Bool,
+        "Labs: with Summaries set to OpenCode, notes follow meetings.notes_format (short, standard, detailed) instead of a title and two sentences",
+    ),
+    key(
         "labs.meeting_language",
         Kind::Bool,
         "Labs: Meetings › Settings offers Language, so every meeting chunk runs in meetings.language on a model that takes a language hint",
@@ -608,6 +613,11 @@ const KEYS: &[Key] = &[
         "meetings.opencode_model",
         Kind::Text,
         "The OpenCode provider/model meeting notes use when meetings.summaries is opencode; none lets Hex pick a fast model",
+    ),
+    key(
+        "meetings.notes_format",
+        Kind::Choice(&["short", "standard", "detailed"]),
+        "With Labs › Detailed meeting notes, how much an OpenCode model writes: short (two sentences), standard (summary, points, decisions), or detailed (summary, points, decisions, next steps, questions)",
     ),
     key(
         "meetings.show_recording_indicator",
@@ -820,6 +830,7 @@ const NEEDS: &[(&str, &str)] = &[
     ("labs.meeting_notes_vocabulary", "meetings"),
     ("labs.meeting_finished_event", "meetings"),
     ("labs.meeting_descriptive_filenames", "meetings"),
+    ("labs.detailed_meeting_notes", "meetings"),
     ("labs.meeting_language", "meetings"),
     ("labs.follow_live_transcript", "meetings"),
     ("experimental.hex_microphone", "fun"),
@@ -1642,6 +1653,22 @@ mod tests {
         let retention = get(&settings, "history_retention").unwrap();
         assert_eq!(retention[0].value, Value::String("week".into()));
         assert_eq!(retention[0].choices.len(), 5);
+    }
+
+    #[test]
+    fn meeting_notes_format_is_a_choice() {
+        let settings = AppSettings::default();
+        let change = apply(&settings, "meetings.notes_format", "short", &rules()).unwrap();
+        assert_eq!(
+            change.settings.meetings.notes_format,
+            crate::app_settings::MeetingNotesFormat::Short
+        );
+        assert_eq!(
+            apply(&settings, "meetings.notes_format", "verbose", &rules())
+                .unwrap_err()
+                .code,
+            "invalid-value"
+        );
     }
 
     #[test]

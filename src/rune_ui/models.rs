@@ -133,6 +133,7 @@ impl Models {
             name: name.into(),
             provider: provider.into(),
             variants: variants.iter().map(|v| v.to_string()).collect(),
+            ..Default::default()
         };
         Self {
             state: ModelCatalogState::Loaded(ModelCatalog {
@@ -182,6 +183,7 @@ impl Models {
                         name: format!("{family} {version}"),
                         provider: provider.into(),
                         variants: Vec::new(),
+                        ..Default::default()
                     });
                 }
             }

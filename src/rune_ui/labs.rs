@@ -427,6 +427,12 @@ fn rows(ui: &Ui) -> Vec<Row> {
             tr("Rename exported meeting Markdown to the meeting's title once notes or a rename provide one, keeping the date and time"),
         ));
         rows.push(row(
+            Feature::DetailedMeetingNotes,
+            None,
+            tr("Detailed meeting notes"),
+            tr("OpenCode writes key points, decisions, next steps, and open questions, in the Summary style you choose"),
+        ));
+        rows.push(row(
             Feature::MeetingLanguage,
             None,
             tr("Meeting language"),
@@ -859,6 +865,7 @@ fn row_key(lab: Lab) -> &'static str {
         Feature::AnnotateReplay => "lab-annotate-replay",
         Feature::MeetingImport => "lab-meeting-import",
         Feature::MeetingDescriptiveFilenames => "lab-meeting-descriptive-filenames",
+        Feature::DetailedMeetingNotes => "lab-detailed-meeting-notes",
         Feature::MeetingLanguage => "lab-meeting-language",
         Feature::ExpireMeetingAudio => "lab-expire-meeting-audio",
         Feature::OpenCodeInWsl => "lab-opencode-in-wsl",

@@ -96,6 +96,10 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        Meetings › Settings offers Language: every chunk of a recording or an
 │                                        import runs in meetings.language on a model that takes a language hint;
 │                                        the manifest keeps it, so a pending final pass uses the same one
+├── Detailed meeting notes no labs.detailed_meeting_notes (every OS with Meetings)
+│                                        with Summaries on OpenCode, notes follow meetings.notes_format: Short,
+│                                        Standard (key points, decisions), or Detailed (also next steps and open
+│                                        questions); Summary style nests under Model
 ├── Expire meeting audio separately no labs.expire_meeting_audio (every OS with Meetings)
 │                                        Meetings › Settings adds Keep audio under Keep meetings: finished meetings drop
 │                                        their WAVs on their own schedule (at or beyond Keep meetings it has no effect),
@@ -1538,6 +1542,19 @@ in [tests/panes.rs](../../src/rune_ui/tests/panes.rs);
 [control/settings.rs](../../src/control/settings.rs). Not yet observed: a real
 pass moving WAVs to a real Trash. The Labs page goldens (`mac-labs`,
 `windows-labs`, `linux-labs`) show the new card.
+
+Detailed meeting notes (`detailed-meeting-notes`, every OS with Meetings):
+with Summaries on OpenCode, Summary style nests under Model and
+`meetings.notes_format` chooses Short (a title and two sentences, as with the
+lab off), Standard (a multi-paragraph summary, key points, decisions), or
+Detailed (also next steps with owners and open questions; the default). Read
+where notes are planned (`app_settings::meeting_notes_format` answers Short
+while the lab is off) and where Settings shows Summary style. Apple
+Intelligence always writes Short notes. The pane, the Markdown copy, `hex
+meetings show --json`, and MCP show whatever sections the notes have. Details
+in [meetings.md](meetings.md#titles-and-notes). Checks:
+`detailed_meeting_notes_is_its_own_bit_and_off_by_default` and the notes tests
+listed there.
 
 Meeting language (`meeting-language`, every OS with Meetings; its row shows
 in Meetings › Settings while it is on): `meetings.language` pins the language

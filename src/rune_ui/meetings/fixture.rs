@@ -2,7 +2,10 @@
 //! without, and one that failed, plus variants with more call services and
 //! live chapters (Labs).
 
-use super::{Chapter, Meeting, MeetingsPane, Status, Transcript, Turn, transcript_markdown};
+use super::{
+    ActionItemView, Chapter, Meeting, MeetingsPane, NotesView, Status, Transcript, Turn,
+    transcript_markdown,
+};
 
 impl MeetingsPane {
     /// One recording, one with notes, one without, and one that failed.
@@ -62,7 +65,7 @@ impl MeetingsPane {
                 clock: clock.into(),
                 duration_ms: minutes * 60_000 + 20_000,
                 app: None,
-                summary: None,
+                notes: None,
                 notes_running: false,
                 reveal: crate::meeting::RevealTarget::Folder(preview_folder(id)),
                 folder: preview_folder(id),
@@ -98,10 +101,22 @@ impl MeetingsPane {
         notes.reveal = crate::meeting::RevealTarget::Markdown(
             "/Users/kit/Documents/Hex Meetings/Arcade launch plan.md".into(),
         );
-        notes.summary = Some(
-            "One login for every Anomaly Arcade game, aiming for twenty to thirty games over the next couple of months. The build screen needs a proposal before more polish."
-                .into(),
-        );
+        notes.notes = Some(NotesView {
+            summary: "One login for every Anomaly Arcade game, aiming for twenty to thirty games over the next couple of months.\n\nThe build screen needs a proposal before more polish.".into(),
+            key_points: vec![
+                "One shared login for the whole arcade".into(),
+                "Twenty to thirty games over the next two months".into(),
+            ],
+            decisions: vec!["Ship the shared login before the first public game".into()],
+            action_items: vec![ActionItemView {
+                owner: Some("You".into()),
+                task: "Write the build screen proposal".into(),
+                due: Some("tomorrow".into()),
+                at: Some("01:41".into()),
+                quote: None,
+            }],
+            open_questions: vec!["Which game launches first?".into()],
+        });
         notes.transcript = Transcript::Loaded(conversation.clone());
         let mut design = meeting(
             "preview-design",

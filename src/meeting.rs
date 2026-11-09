@@ -74,7 +74,9 @@ pub use chapters::section_for_id;
 pub use chapters::{Chapter, chapter_entries, section_markdown};
 pub use delta::*;
 use language::{apply_manifest_language, pinned_language, requested_language};
-pub use notes::{MeetingNotes, display_title, notes_in_progress, notes_wanted, spawn_summary};
+pub use notes::{
+    ActionItem, MeetingNotes, display_title, notes_in_progress, notes_wanted, spawn_summary,
+};
 #[cfg(all(debug_assertions, target_os = "macos"))]
 pub use notes::{summarize, summarize_file};
 #[cfg(test)]
@@ -1140,13 +1142,7 @@ pub fn day_label(milliseconds: u64, now_ms: u64) -> String {
 
 /// The notes as Markdown, for copying.
 pub fn notes_markdown(notes: &MeetingNotes) -> String {
-    notes::render_notes_block(notes)
-        .lines()
-        .filter(|line| !line.starts_with("<!--") && !line.starts_with("_Written on this Mac"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
+    notes::notes_body(notes)
 }
 
 /// Speaker turns as Markdown, for copying.

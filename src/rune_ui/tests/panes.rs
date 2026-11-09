@@ -1556,9 +1556,9 @@ fn the_overflow_menu_copies_the_summary_and_asks_for_new_notes() {
     let copy = menu_item(&rt, "meeting-actions", "Copy summary");
     tap(&mut rt, &copy);
     assert!(
-        rt.copy_request
-            .as_deref()
-            .is_some_and(|summary| summary.starts_with("One login"))
+        rt.copy_request.as_deref().is_some_and(|notes| {
+            notes.starts_with("## Summary") && notes.contains("One login")
+        })
     );
     assert_eq!(rt.state.open, Some(Menu::MeetingActions), "stays open");
     let regenerate = menu_item(&rt, "meeting-actions", "Regenerate summary");

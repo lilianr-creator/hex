@@ -222,6 +222,7 @@ mod tests {
             name: "Example Rewrite".into(),
             provider: "opencode".into(),
             variants,
+            ..Default::default()
         }
     }
 

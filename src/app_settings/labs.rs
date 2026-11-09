@@ -136,6 +136,8 @@ pub struct LabsSettings {
     pub meeting_import: bool,
     /// Notes or a rename rename an exported meeting's Markdown to the meeting's title, keeping its date and time.
     pub meeting_descriptive_filenames: bool,
+    /// OpenCode meeting notes follow `meetings.notes_format`: key points, decisions, next steps, and open questions.
+    pub detailed_meeting_notes: bool,
     /// Meetings › Settings offers Language: every chunk of a meeting runs in `meetings.language`.
     pub meeting_language: bool,
     /// Finished meetings drop their WAV tracks on `meetings.audio_retention`,
@@ -217,6 +219,7 @@ impl Default for LabsSettings {
             follow_live_transcript: false,
             meeting_import: false,
             meeting_descriptive_filenames: false,
+            detailed_meeting_notes: false,
             meeting_language: false,
             expire_meeting_audio: false,
             groups: std::collections::BTreeMap::new(),

@@ -121,6 +121,7 @@ pub enum Feature {
     AnnotateReplay,
     MeetingImport,
     MeetingDescriptiveFilenames,
+    MeetingLanguage,
     QuitClosesWindow,
     ExpireMeetingAudio,
     CapsLockDictation,
@@ -128,7 +129,7 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Self; 61] = [
+    pub const ALL: [Self; 62] = [
         Self::Meetings,
         Self::VoiceFilter,
         Self::Playground,
@@ -186,6 +187,7 @@ impl Feature {
         Self::AnnotateReplay,
         Self::MeetingImport,
         Self::MeetingDescriptiveFilenames,
+        Self::MeetingLanguage,
         Self::QuitClosesWindow,
         Self::ExpireMeetingAudio,
         Self::CapsLockDictation,
@@ -270,6 +272,7 @@ impl Feature {
             | Self::AnnotateReplay
             | Self::MeetingImport
             | Self::MeetingDescriptiveFilenames
+            | Self::MeetingLanguage
             | Self::ExpireMeetingAudio
             | Self::NotchIndicator
             | Self::QuitClosesWindow
@@ -341,6 +344,7 @@ impl Feature {
             | Self::TerminalPasteShortcut
             | Self::ReleaseNotesLink
             | Self::OpenCodeInWsl => 20261108,
+            Self::MeetingLanguage => 20261109,
         }
     }
 
@@ -440,6 +444,7 @@ impl Feature {
             | Self::MeetingNotesVocabulary
             | Self::MeetingFinishedEvent
             | Self::MeetingDescriptiveFilenames
+            | Self::MeetingLanguage
             | Self::FollowLiveTranscript
             | Self::MoreCallApps
             | Self::ExpireMeetingAudio
@@ -509,6 +514,7 @@ impl Feature {
             Self::AnnotateReplay => "annotate-replay",
             Self::MeetingImport => "meeting-import",
             Self::MeetingDescriptiveFilenames => "meeting-descriptive-filenames",
+            Self::MeetingLanguage => "meeting-language",
             Self::QuitClosesWindow => "quit-closes-window",
             Self::ExpireMeetingAudio => "expire-meeting-audio",
             Self::CapsLockDictation => "caps-lock-dictation",
@@ -576,6 +582,7 @@ impl Feature {
             Self::AnnotateReplay => "labs.annotate_replay",
             Self::MeetingImport => "labs.meeting_import",
             Self::MeetingDescriptiveFilenames => "labs.meeting_descriptive_filenames",
+            Self::MeetingLanguage => "labs.meeting_language",
             Self::QuitClosesWindow => "labs.quit_closes_window",
             Self::ExpireMeetingAudio => "labs.expire_meeting_audio",
             Self::CapsLockDictation => "labs.caps_lock_dictation",
@@ -647,6 +654,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay,
             Self::MeetingImport => settings.labs.meeting_import,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames,
+            Self::MeetingLanguage => settings.labs.meeting_language,
             Self::QuitClosesWindow => settings.labs.quit_closes_window,
             Self::ExpireMeetingAudio => settings.labs.expire_meeting_audio,
             Self::CapsLockDictation => settings.labs.caps_lock_dictation,
@@ -716,6 +724,7 @@ impl Feature {
             &mut labs.annotate_replay,
             &mut labs.meeting_import,
             &mut labs.meeting_descriptive_filenames,
+            &mut labs.meeting_language,
             &mut labs.quit_closes_window,
             &mut labs.expire_meeting_audio,
             &mut labs.caps_lock_dictation,
@@ -785,6 +794,7 @@ impl Feature {
             Self::AnnotateReplay => settings.labs.annotate_replay = on,
             Self::MeetingImport => settings.labs.meeting_import = on,
             Self::MeetingDescriptiveFilenames => settings.labs.meeting_descriptive_filenames = on,
+            Self::MeetingLanguage => settings.labs.meeting_language = on,
             Self::QuitClosesWindow => settings.labs.quit_closes_window = on,
             Self::ExpireMeetingAudio => settings.labs.expire_meeting_audio = on,
             Self::CapsLockDictation => settings.labs.caps_lock_dictation = on,
@@ -864,6 +874,8 @@ const CAPS_LOCK_SLOW_BLINK: u64 = TYPED_TEXT << 1;
 /// The next bit above Caps Lock's slow blink: an OpenCode service in WSL is
 /// found when no Windows one answers (Windows).
 const OPENCODE_IN_WSL: u64 = CAPS_LOCK_SLOW_BLINK << 1;
+/// The next bit above OPENCODE_IN_WSL's switch.
+const MEETING_LANGUAGE: u64 = OPENCODE_IN_WSL << 1;
 
 /// This process's `labs` switches: unknown until settings load or one is
 /// first read.
@@ -1133,6 +1145,11 @@ pub fn meeting_descriptive_filenames() -> bool {
     on(MEETING_DESCRIPTIVE_FILENAMES) && Feature::MeetingDescriptiveFilenames.on_this_os()
 }
 
+/// Meetings may pin their language (read where a recording or an import starts, and where Settings shows Language).
+pub fn meeting_language() -> bool {
+    on(MEETING_LANGUAGE) && Feature::MeetingLanguage.on_this_os()
+}
+
 /// A physical Caps Lock press starts and stops dictation, and its light
 /// follows Hex's recording and processing (macOS; read by the listener on
 /// every pass and by the event tap and HID tracker through their own flag).
@@ -1309,6 +1326,11 @@ fn encode_where(settings: &LabsSettings, reaches: impl Fn(Feature) -> bool) -> u
             Feature::MeetingDescriptiveFilenames,
             settings.meeting_descriptive_filenames,
             MEETING_DESCRIPTIVE_FILENAMES,
+        ),
+        (
+            Feature::MeetingLanguage,
+            settings.meeting_language,
+            MEETING_LANGUAGE,
         ),
         (
             Feature::CapsLockDictation,
@@ -1818,6 +1840,18 @@ mod tests {
         let state = encode_where(&labs, |_| true);
         assert_ne!(state & MEETING_DESCRIPTIVE_FILENAMES, 0);
         assert_eq!(state & LIVE_TYPING, 0);
+        assert_eq!((state >> MINUTES_SHIFT) & MINUTES_MASK, 24 * 60);
+    }
+
+    #[test]
+    fn meeting_language_is_its_own_bit_and_off_by_default() {
+        let mut labs = LabsSettings::default();
+        assert_eq!(encode_where(&labs, |_| true) & MEETING_LANGUAGE, 0);
+        labs.meeting_language = true;
+        labs.unload_idle_minutes = 24 * 60;
+        let state = encode_where(&labs, |_| true);
+        assert_ne!(state & MEETING_LANGUAGE, 0);
+        assert_eq!(state & CAPS_LOCK_SLOW_BLINK, 0);
         assert_eq!((state >> MINUTES_SHIFT) & MINUTES_MASK, 24 * 60);
     }
 

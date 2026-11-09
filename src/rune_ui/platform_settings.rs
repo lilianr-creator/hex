@@ -446,6 +446,78 @@ pub(super) fn meetings_toggle(ui: &Ui, p: Paint) -> El {
 /// it's missing); once on, how long meetings are kept, Calendar and each detected call provider's Ask /
 /// Always record / Never offer choice; behind Advanced the indicator,
 /// folder, Apple Intelligence notes, and the granted permission.
+/// The language every meeting chunk runs in. Only a model that takes a
+/// language hint can honour it; Parakeet v3 and Apple Speech keep their own.
+fn meeting_language_row(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    let model = crate::transcription::models::definition(ui.settings.transcription.model);
+    let takes_hint = model.takes_run_language();
+    let saved = ui.settings.meetings.language.as_deref();
+    if !takes_hint {
+        return icon_row(
+            p,
+            "meeting-language",
+            &icons::LANGUAGES,
+            tr("Language"),
+            Some(tr("This model detects the language on every chunk")),
+            row()
+                .key("meeting-language-value")
+                .h(24.0)
+                .center_y()
+                .child(
+                    text(tr("Same as dictation"))
+                        .font(p.k.ty.ui_medium.lh(16.0))
+                        .color(p.faint()),
+                ),
+        );
+    }
+
+    let codes = model.language_choices();
+    let labels: Vec<&'static str> = std::iter::once(tr("Same as dictation"))
+        .chain(
+            codes
+                .iter()
+                .map(|code| crate::transcription::models::language_name(code)),
+        )
+        .collect();
+    let selected = saved
+        .and_then(|language| codes.iter().position(|code| *code == language))
+        .map_or(0, |index| index + 1);
+    let stale = saved.is_some() && selected == 0;
+    let control = super::general::pick_select(
+        ui,
+        p,
+        "meeting-language",
+        tr("Language"),
+        labels,
+        selected,
+        |ui, index| {
+            let model = crate::transcription::models::definition(ui.settings.transcription.model);
+            let language = if index == 0 {
+                None
+            } else {
+                model
+                    .language_choices()
+                    .get(index - 1)
+                    .map(|code| (*code).to_string())
+            };
+            ui.update(|settings| settings.meetings.language = language);
+        },
+        layer,
+    );
+    icon_row(
+        p,
+        "meeting-language",
+        &icons::LANGUAGES,
+        tr("Language"),
+        Some(if stale {
+            tr("The saved language is not supported by this model; meetings follow dictation")
+        } else {
+            tr("Pins the language for every meeting chunk")
+        }),
+        control,
+    )
+}
+
 pub(super) fn meetings_settings(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<El> {
     use super::general::advanced_toggle;
     let meetings = &ui.settings.meetings;
@@ -492,6 +564,9 @@ pub(super) fn meetings_settings(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<E
         } else {
             rows.push(system_audio);
         }
+    }
+    if meetings.enabled && ui.settings.labs.meeting_language {
+        rows.push(meeting_language_row(ui, p, layer));
     }
     let mut after = Vec::new();
     if meetings.enabled {

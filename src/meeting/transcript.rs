@@ -743,17 +743,23 @@ impl ChunkModel {
         }
         let engine = crate::transcription::engine::TranscriptionEngine::shared();
         if let Some(engine) = &engine
-            && let Some(result) = Self::transcribe_shared(engine, samples)
+            && let Some(result) = Self::transcribe_shared(engine, samples, &self.selection.language)
         {
             self.owned = None;
             return result;
         }
-        // In the app, follow dictation's current choice, such as Apple Speech.
-        let selection = if engine.is_some() {
+        // In the app, follow dictation's current choice, such as Apple Speech,
+        // but keep the meeting's snapshotted language whenever that model can
+        // take it.
+        let mut selection = if engine.is_some() {
             crate::app_settings::transcription_selection().1
         } else {
             self.selection.clone()
         };
+        let desired = &self.selection.language;
+        if crate::transcription::models::definition(selection.model).supports_language(desired) {
+            selection.language = desired.clone();
+        }
         drop(engine);
         if self
             .owned
@@ -779,7 +785,7 @@ impl ChunkModel {
             }
         };
         model
-            .transcribe_segments(samples.to_vec())
+            .transcribe_segments_with_language(samples.to_vec(), Some(&selection.language))
             .map(Chunked::Done)
     }
 
@@ -787,8 +793,10 @@ impl ChunkModel {
     fn transcribe_shared(
         engine: &crate::transcription::engine::TranscriptionEngine,
         samples: &[f32],
+        language: &str,
     ) -> Option<Result<Chunked>> {
         let samples = samples.to_vec();
+        let language = language.to_string();
         enum Shared {
             Busy,
             NoModel,
@@ -802,7 +810,7 @@ impl ChunkModel {
             match engine_model(model) {
                 Some(transcriber) => Shared::Ran(
                     crate::transcription::background_priority::at_background_priority(|| {
-                        transcriber.transcribe_segments(samples)
+                        transcriber.transcribe_segments_with_language(samples, Some(&language))
                     }),
                 ),
                 None => Shared::NoModel,

@@ -254,6 +254,8 @@ fn meeting_live_replay() {
         notes_error: None,
         calendar: None,
         title_source: None,
+        language: None,
+        language_pinned: false,
         chapters: Vec::new(),
         chapters_refined: false,
         retention_applies: false,

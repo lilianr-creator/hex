@@ -515,12 +515,31 @@ impl LocalTranscriber {
         self.timed(&samples)
     }
 
+    /// One meeting chunk with the meeting's language, when the loaded model
+    /// takes a hint. `None` keeps the language this model was loaded with.
+    pub(crate) fn transcribe_segments_with_language(
+        &mut self,
+        mut samples: Vec<f32>,
+        language: Option<&str>,
+    ) -> Result<crate::transcription::transcript::Transcript> {
+        crate::dictation::pad_for_parakeet(&mut samples);
+        self.timed_with_language(&samples, language)
+    }
+
     /// Text, segments, and words, in chunks the model takes whole.
     fn timed(&mut self, samples: &[f32]) -> Result<crate::transcription::transcript::Transcript> {
-        match self.timed_here(samples) {
+        self.timed_with_language(samples, None)
+    }
+
+    fn timed_with_language(
+        &mut self,
+        samples: &[f32],
+        language: Option<&str>,
+    ) -> Result<crate::transcription::transcript::Transcript> {
+        match self.timed_here(samples, language) {
             Err(error) if self.gpu_failed(&error) => {
                 self.recover_on_cpu(&error)?;
-                self.timed_here(samples)
+                self.timed_here(samples, language)
             }
             result => result,
         }
@@ -598,14 +617,23 @@ impl LocalTranscriber {
     fn timed_here(
         &mut self,
         samples: &[f32],
+        language: Option<&str>,
     ) -> Result<crate::transcription::transcript::Transcript> {
         use crate::transcription::transcript::TranscriptSegment;
         const CHUNK: usize = 30 * 16_000;
         let chunk = self.max_audio_samples.map_or(CHUNK, |max| max.min(CHUNK));
-        let options = RunOptions {
+        let mut options = RunOptions {
             timestamps: self.finest_timestamps,
             ..self.options.clone()
         };
+        let definition = crate::transcription::models::definition(self.selection.model);
+        if let Some(language) = language
+            && definition.takes_meeting_language(language)
+        {
+            options.language = definition
+                .runtime_language_hint(language)
+                .map(str::to_string);
+        }
         let span = |offset: i64, t0: i64, t1: i64, text: String| {
             let text = text.trim().to_owned();
             (!text.is_empty()).then(|| TranscriptSegment {

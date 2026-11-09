@@ -42,6 +42,11 @@ pub struct MeetingSettings {
     pub enabled: bool,
     /// Folder for finished Markdown transcripts; `None` uses the default.
     pub output_folder: Option<PathBuf>,
+    /// The language meeting chunks run in; `None` follows dictation and is
+    /// left out of the file. A fixed code only takes effect on a model that
+    /// accepts a language hint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Who titles finished meetings and writes their two-sentence summary.
     pub summaries: MeetingSummaries,
     /// Retired: read once by the summaries migration, never written.
@@ -317,6 +322,7 @@ impl Default for MeetingSettings {
         Self {
             enabled: false,
             output_folder: None,
+            language: None,
             summaries: MeetingSummaries::platform_default(),
             summarize_with_apple_intelligence: None,
             summarize_with_opencode: None,
@@ -359,6 +365,15 @@ pub fn meetings_off_reason() -> &'static str {
         Some(lock) => lock.refusal(),
         None => "Meetings are off; turn them on with `hex settings set meetings.enabled on`",
     }
+}
+
+/// The language meeting chunks are pinned to, as last applied; `None`
+/// follows dictation.
+pub fn meeting_language() -> Option<String> {
+    MEETING_LANGUAGE
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
 }
 
 /// Who writes meeting notes, as last applied.

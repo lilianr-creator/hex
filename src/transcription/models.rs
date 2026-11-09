@@ -287,6 +287,19 @@ impl ModelDefinition {
             .then(|| self.runtime_language(language))
     }
 
+    /// Whether each run can carry its own language. A model without a
+    /// language input (Parakeet v3, GigaAM) cannot, and Apple Speech's locale
+    /// belongs to the loaded transcriber, so it keeps its own.
+    pub fn takes_run_language(&self) -> bool {
+        self.accepts_language_hint && !matches!(self.runtime, ModelRuntime::AppleSpeech)
+    }
+
+    /// Whether a meeting can run in `language` on this model as loaded.
+    /// When it cannot, runs keep the language the model was loaded with.
+    pub fn takes_meeting_language(&self, language: &str) -> bool {
+        self.takes_run_language() && self.supports_language(language)
+    }
+
     /// The languages Settings offers for this model, in [`LANGUAGES`] order,
     /// Auto first when the model detects the language, then the other
     /// languages the model declares (an import's Norwegian, #1148).
@@ -2425,5 +2438,22 @@ mod tests {
         assert_eq!(max_audio_chunk_samples("cohere_asr", 10_000), Some(160_000));
         assert_eq!(max_audio_chunk_samples("whisper", 0), None);
         assert_eq!(max_audio_chunk_samples("parakeet", 60_000), Some(960_000));
+    }
+
+    #[test]
+    fn a_meeting_language_needs_a_model_that_takes_it_per_run() {
+        let whisper = definition(TranscriptionModelId::WhisperLargeV3Turbo);
+        let cohere = definition(TranscriptionModelId::CohereTranscribe);
+        let parakeet_v3 = definition(TranscriptionModelId::ParakeetV3);
+        let apple = definition(TranscriptionModelId::AppleSpeech);
+
+        assert!(cohere.takes_meeting_language("fr"));
+        assert!(whisper.takes_meeting_language("fr"));
+        assert!(whisper.takes_meeting_language(AUTO_LANGUAGE));
+        assert_eq!(whisper.runtime_language_hint(AUTO_LANGUAGE), None);
+        assert!(!parakeet_v3.takes_meeting_language("fr"));
+        assert!(!apple.takes_meeting_language("fr"));
+        // Cohere has no Russian: its runs keep the language it loaded with.
+        assert!(!cohere.takes_meeting_language("ru"));
     }
 }

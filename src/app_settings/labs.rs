@@ -136,6 +136,8 @@ pub struct LabsSettings {
     pub meeting_import: bool,
     /// Notes or a rename rename an exported meeting's Markdown to the meeting's title, keeping its date and time.
     pub meeting_descriptive_filenames: bool,
+    /// Meetings › Settings offers Language: every chunk of a meeting runs in `meetings.language`.
+    pub meeting_language: bool,
     /// Finished meetings drop their WAV tracks on `meetings.audio_retention`,
     /// keeping their transcripts, notes, and summary.
     pub expire_meeting_audio: bool,
@@ -215,6 +217,7 @@ impl Default for LabsSettings {
             follow_live_transcript: false,
             meeting_import: false,
             meeting_descriptive_filenames: false,
+            meeting_language: false,
             expire_meeting_audio: false,
             groups: std::collections::BTreeMap::new(),
         }

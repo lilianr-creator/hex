@@ -53,6 +53,24 @@ fn launch_note(path: &Path) -> Option<String> {
 }
 
 #[test]
+fn meeting_language_is_optional_and_older_files_follow_dictation() {
+    let settings: MeetingSettings = serde_json::from_str("{}").unwrap();
+    assert!(settings.language.is_none());
+
+    let mut pinned = settings;
+    pinned.language = Some("fr".into());
+    let written = serde_json::to_value(&pinned).unwrap();
+    assert_eq!(written["language"], "fr");
+    let decoded: MeetingSettings = serde_json::from_value(written).unwrap();
+    assert_eq!(decoded.language.as_deref(), Some("fr"));
+
+    // Following dictation leaves the key out of the file.
+    pinned.language = None;
+    let written = serde_json::to_value(&pinned).unwrap();
+    assert!(written.get("language").is_none());
+}
+
+#[test]
 fn unset_retention_saves_a_shape_older_hex_can_read() {
     // The meeting field in 46c3c762 was non-optional, defaulting to Forever.
     #[derive(Deserialize)]

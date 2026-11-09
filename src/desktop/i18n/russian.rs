@@ -1205,6 +1205,12 @@ const TRANSLATIONS: &[(&str, &str)] = &[
     ("Another dictation shortcut that always pastes with Ctrl+Shift+V", "Ещё одно сочетание для диктовки, которое всегда вставляет через Ctrl+Shift+V"),
     ("OpenCode in WSL", "OpenCode в WSL"),
     ("Use an OpenCode service running in your default WSL distribution for Modes rewriting and the Modes model picker. Looking for it can start WSL.", "Использует службу OpenCode, запущенную в вашем дистрибутиве WSL по умолчанию, для переписывания в режимах и выбора моделей в режимах. Её поиск может запустить WSL."),
+    ("Same as dictation", "Как при диктовке"),
+    ("This model detects the language on every chunk", "Эта модель определяет язык в каждом фрагменте"),
+    ("The saved language is not supported by this model; meetings follow dictation", "Эта модель не поддерживает сохранённый язык; встречи следуют диктовке"),
+    ("Pins the language for every meeting chunk", "Закрепляет язык для каждого фрагмента встречи"),
+    ("Meeting language", "Язык встреч"),
+    ("Pin the language meetings are transcribed in, instead of following dictation", "Закрепляет язык расшифровки встреч вместо языка диктовки"),
 ];
 
 #[cfg(test)]

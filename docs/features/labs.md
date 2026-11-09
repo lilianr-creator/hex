@@ -92,6 +92,10 @@ Feature             Pane  Toggle (settings.json, hex settings)   On: what it doe
 │                                        once notes or a rename give a meeting a title, its exported Markdown is renamed
 │                                        in place to <date> <time> <title>.md; a taken name adds " (2)", and the
 │                                        manifest follows so Reveal, Trash, and retention see the new path
+├── Meeting language no labs.meeting_language (every OS with Meetings)
+│                                        Meetings › Settings offers Language: every chunk of a recording or an
+│                                        import runs in meetings.language on a model that takes a language hint;
+│                                        the manifest keeps it, so a pending final pass uses the same one
 ├── Expire meeting audio separately no labs.expire_meeting_audio (every OS with Meetings)
 │                                        Meetings › Settings adds Keep audio under Keep meetings: finished meetings drop
 │                                        their WAVs on their own schedule (at or beyond Keep meetings it has no effect),
@@ -1534,6 +1538,18 @@ in [tests/panes.rs](../../src/rune_ui/tests/panes.rs);
 [control/settings.rs](../../src/control/settings.rs). Not yet observed: a real
 pass moving WAVs to a real Trash. The Labs page goldens (`mac-labs`,
 `windows-labs`, `linux-labs`) show the new card.
+
+Meeting language (`meeting-language`, every OS with Meetings; its row shows
+in Meetings › Settings while it is on): `meetings.language` pins the language
+every meeting chunk runs in, instead of the dictation language. Read where a
+recording or an import starts (`meeting::language::requested_language`); a
+model that cannot take a language per run (Parakeet v3, GigaAM, Apple Speech)
+keeps following dictation, and the row says so. The language is snapshotted
+in the manifest (`language`, `language_pinned`), so the final pass and a
+pending resume use it even if the setting or the lab changes. Details in
+[meetings.md](meetings.md). Checks: `meeting_language_is_its_own_bit_and_off_by_default`,
+`meeting_language_shows_with_its_lab_and_pins_a_code`, and the meeting tests
+listed there.
 
 Descriptive meeting file names (`meeting-descriptive-filenames`, every OS
 with Meetings; its row shows wherever Meetings does): an exported meeting

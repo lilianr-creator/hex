@@ -544,6 +544,33 @@ fn keep_audio_shows_with_its_lab_and_saves_its_window() {
     );
 }
 
+#[test]
+fn meeting_language_shows_with_its_lab_and_pins_a_code() {
+    use crate::transcription::models::{TranscriptionModelId, definition};
+    let mut rt = runtime("portal", true, TALL_SIZE);
+    rt.state.settings.meetings.enabled = true;
+    rt.state.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+    rt.state.pane = Pane::Meetings;
+    rt.state.meetings.view = super::super::meetings::View::Settings;
+    refresh(&mut rt);
+    assert!(
+        rt.find("meeting-language").is_none(),
+        "hidden while the lab is off"
+    );
+
+    rt.state.settings.labs.meeting_language = true;
+    refresh(&mut rt);
+    assert_eq!(
+        a11y_value(&rt, "meeting-language-control-trigger").as_deref(),
+        Some("Same as dictation")
+    );
+    pick(&mut rt, "meeting-language", 1);
+    let first = definition(TranscriptionModelId::WhisperLargeV3Turbo).language_choices()[0];
+    assert_eq!(rt.state.settings.meetings.language.as_deref(), Some(first));
+    pick(&mut rt, "meeting-language", 0);
+    assert_eq!(rt.state.settings.meetings.language, None);
+}
+
 /// Off a Mac, Summaries is a switch that turns OpenCode on.
 #[test]
 fn summaries_are_a_switch_off_a_mac() {

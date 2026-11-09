@@ -4,6 +4,117 @@ use super::retention::{
 use super::*;
 use hound::WavReader;
 
+use crate::transcription::models::{
+    AUTO_LANGUAGE, TranscriptionModelId, TranscriptionSelection, definition,
+};
+
+fn selection(model: TranscriptionModelId, language: &str) -> TranscriptionSelection {
+    TranscriptionSelection {
+        model,
+        language: language.into(),
+    }
+}
+
+#[test]
+fn a_meeting_pins_the_language_only_on_a_model_that_takes_a_hint() {
+    let whisper = definition(TranscriptionModelId::WhisperLargeV3Turbo);
+    let cohere = definition(TranscriptionModelId::CohereTranscribe);
+    let parakeet_v3 = definition(TranscriptionModelId::ParakeetV3);
+
+    assert_eq!(
+        pinned_language(
+            cohere,
+            &selection(TranscriptionModelId::CohereTranscribe, "en"),
+            Some("fr")
+        ),
+        ("fr".into(), true)
+    );
+    assert_eq!(
+        pinned_language(
+            whisper,
+            &selection(TranscriptionModelId::WhisperLargeV3Turbo, "auto"),
+            Some("fr")
+        ),
+        ("fr".into(), true)
+    );
+    assert_eq!(
+        pinned_language(
+            whisper,
+            &selection(TranscriptionModelId::WhisperLargeV3Turbo, "en"),
+            Some(AUTO_LANGUAGE)
+        ),
+        (AUTO_LANGUAGE.into(), false)
+    );
+    // Parakeet v3 ignores a language input entirely, so the meeting keeps
+    // following dictation instead of claiming a pin it cannot honour.
+    assert_eq!(
+        pinned_language(
+            parakeet_v3,
+            &selection(TranscriptionModelId::ParakeetV3, "en"),
+            Some("fr")
+        ),
+        ("en".into(), false)
+    );
+    // No choice follows dictation.
+    assert_eq!(
+        pinned_language(
+            cohere,
+            &selection(TranscriptionModelId::CohereTranscribe, "de"),
+            None
+        ),
+        ("de".into(), false)
+    );
+}
+
+#[test]
+fn a_pending_meeting_reuses_its_snapshotted_language() {
+    let mut whisper = selection(TranscriptionModelId::WhisperLargeV3Turbo, "en");
+    apply_manifest_language(&mut whisper, Some("fr"));
+    assert_eq!(whisper.language, "fr");
+    apply_manifest_language(&mut whisper, Some("not-a-language"));
+    assert_eq!(whisper.language, "fr");
+    apply_manifest_language(&mut whisper, None);
+    assert_eq!(whisper.language, "fr");
+
+    let mut parakeet = selection(TranscriptionModelId::ParakeetV3, "en");
+    apply_manifest_language(&mut parakeet, Some("fr"));
+    assert_eq!(parakeet.language, "fr");
+
+    // Apple Speech finishes in the locale it is installed for, so a pending
+    // meeting never waits on another locale's assets.
+    let mut apple = selection(TranscriptionModelId::AppleSpeech, "en");
+    apply_manifest_language(&mut apple, Some("fr"));
+    assert_eq!(apple.language, "en");
+}
+
+#[test]
+fn a_manifest_records_the_language_a_meeting_ran_in() {
+    let mut manifest = retention_manifest("language", MeetingStatus::Complete, 1, Some(2));
+    manifest.language = Some("fr".into());
+    manifest.language_pinned = true;
+    let json = serde_json::to_value(&manifest).unwrap();
+    assert_eq!(json["language"], "fr");
+    assert_eq!(json["language_pinned"], true);
+    let decoded: MeetingManifest = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.language.as_deref(), Some("fr"));
+    assert!(decoded.language_pinned);
+
+    // Older manifests have neither field.
+    let old: MeetingManifest = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "old",
+        "title": "Old",
+        "status": "complete",
+        "created_at_ms": 1,
+        "system": {"file": "system.wav", "samples": 0, "dropped_packets": 0},
+        "microphone": {"file": "microphone.wav", "samples": 0, "dropped_packets": 0},
+        "error": null
+    }))
+    .unwrap();
+    assert!(old.language.is_none());
+    assert!(!old.language_pinned);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn decodes_float_and_aligned_24_bit_integer_samples() {
@@ -168,6 +279,8 @@ fn capture_failures_are_persisted_instead_of_looking_interrupted() {
         notes_error: None,
         calendar: None,
         title_source: None,
+        language: None,
+        language_pinned: false,
         chapters: Vec::new(),
         chapters_refined: false,
         retention_applies: false,
@@ -216,6 +329,8 @@ fn mid_meeting_capture_loss_proceeds_to_transcription_when_audio_was_recorded() 
         notes_error: None,
         calendar: None,
         title_source: None,
+        language: None,
+        language_pinned: false,
         chapters: Vec::new(),
         chapters_refined: false,
         retention_applies: false,
@@ -818,6 +933,8 @@ fn retention_manifest(
         notes_error: None,
         calendar: None,
         title_source: None,
+        language: None,
+        language_pinned: false,
         chapters: Vec::new(),
         chapters_refined: false,
         retention_applies: false,

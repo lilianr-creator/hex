@@ -53,6 +53,8 @@ static MEETINGS_ENABLED: AtomicBool = AtomicBool::new(false);
 static PAUSE_BROWSER_MEDIA: AtomicBool = AtomicBool::new(false);
 static HEX_MICROPHONE_ENABLED: AtomicBool = AtomicBool::new(false);
 static MEETING_SUMMARIES: AtomicU8 = AtomicU8::new(MeetingSummaries::platform_default() as u8);
+/// [`MeetingSettings::language`] for the running meeting controller.
+static MEETING_LANGUAGE: RwLock<Option<String>> = RwLock::new(None);
 static MEETING_INDICATOR_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_CORNER: AtomicU8 = AtomicU8::new(0);
 /// [`MeetingRetention::encode`]d; [`RETENTION_UNSET`] until settings apply.
@@ -794,6 +796,9 @@ impl AppSettings {
             self.experimental.hex_microphone_strength,
         );
         MEETING_SUMMARIES.store(self.meetings.summaries as u8, Ordering::Release);
+        *MEETING_LANGUAGE
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = self.meetings.language.clone();
         crate::meeting::generator::set_summary_model(self.meetings.opencode_model.as_deref());
         MEETING_INDICATOR_ENABLED.store(self.meetings.show_recording_indicator, Ordering::Release);
         MEETING_INDICATOR_CORNER.store(

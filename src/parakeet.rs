@@ -1336,9 +1336,26 @@ impl Parakeet {
             .transcribe_chunked(samples, &self.options, self.max_audio_samples)
     }
 
-    pub fn transcribe_segments(&mut self, samples: &[f32]) -> Result<Transcript> {
+    /// One run with the meeting's language, when the loaded model takes a
+    /// hint. `None` keeps the language this model was loaded with.
+    pub fn transcribe_segments_with_language(
+        &mut self,
+        samples: &[f32],
+        language: Option<&str>,
+    ) -> Result<Transcript> {
+        let mut options = self.options.clone();
+        if let Some(language) = language
+            && let Some(selection) = &self.selection
+        {
+            let definition = crate::transcription::models::definition(selection.model);
+            if definition.takes_meeting_language(language) {
+                options.language = definition
+                    .runtime_language_hint(language)
+                    .map(str::to_string);
+            }
+        }
         self.session
-            .run(samples, &self.options)
+            .run(samples, &options)
             .wrap_err("transcription failed")
     }
 }

@@ -47,11 +47,15 @@ pub(crate) fn import(source: &Path) -> Result<MeetingManifest> {
             source.display()
         ));
     }
-    let (_, selection) = crate::app_settings::transcription_selection();
+    let (_, mut selection) = crate::app_settings::transcription_selection();
     let model = crate::transcription::models::validate(&selection)?;
     if !crate::transcription::models::is_installed(model, &selection.language) {
         return Err(eyre!("{} is not installed", model.name));
     }
+    // An imported recording runs in Meetings › Language like a recorded one.
+    let (language, language_pinned) =
+        super::pinned_language(model, &selection, super::requested_language().as_deref());
+    selection.language = language.clone();
 
     let created_at_ms = now_ms();
     let id = format!("{created_at_ms}-{}", std::process::id());
@@ -120,6 +124,8 @@ pub(crate) fn import(source: &Path) -> Result<MeetingManifest> {
             notes_error: None,
             calendar: None,
             title_source: None,
+            language: Some(language),
+            language_pinned,
             chapters: Vec::new(),
             chapters_refined: false,
             retention_applies: true,

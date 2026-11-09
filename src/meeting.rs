@@ -55,6 +55,7 @@ pub(crate) mod finished_events;
 pub(crate) mod generator;
 #[cfg(target_os = "macos")]
 pub(crate) mod import;
+mod language;
 pub(crate) mod mcp;
 mod notes;
 pub mod query;
@@ -72,6 +73,7 @@ pub use chapters::chapters_file;
 pub use chapters::section_for_id;
 pub use chapters::{Chapter, chapter_entries, section_markdown};
 pub use delta::*;
+use language::{apply_manifest_language, pinned_language, requested_language};
 pub use notes::{MeetingNotes, display_title, notes_in_progress, notes_wanted, spawn_summary};
 #[cfg(all(debug_assertions, target_os = "macos"))]
 pub use notes::{summarize, summarize_file};
@@ -200,6 +202,14 @@ pub struct MeetingManifest {
     /// than the default one counts as the user's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_source: Option<TitleSource>,
+    /// The language every chunk of this meeting ran in, snapshotted when it
+    /// started (a language code, or `auto`). Older manifests have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// Whether `language` was the user's fixed Meetings › Language choice,
+    /// rather than following dictation or asking the model to detect.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub language_pinned: bool,
     /// Topic chapters in time order (Labs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chapters: Vec<Chapter>,
@@ -429,7 +439,7 @@ pub fn record(
     shutdown: &AtomicBool,
     updates: Option<SyncSender<RecordingUpdate>>,
 ) -> Result<MeetingManifest> {
-    let (_, transcription_selection) = crate::app_settings::transcription_selection();
+    let (_, mut transcription_selection) = crate::app_settings::transcription_selection();
     let transcription_model = crate::transcription::models::validate(&transcription_selection)?;
     if !crate::transcription::models::is_installed(
         transcription_model,
@@ -437,6 +447,23 @@ pub fn record(
     ) {
         return Err(eyre!("{} is not installed", transcription_model.name));
     }
+    let requested_language = requested_language();
+    let (language, language_pinned) = pinned_language(
+        transcription_model,
+        &transcription_selection,
+        requested_language.as_deref(),
+    );
+    if let Some(requested) = requested_language.as_deref()
+        && requested != language.as_str()
+    {
+        tracing::warn!(
+            model = transcription_model.name,
+            requested,
+            using = %language,
+            "this model cannot pin the meeting language; following dictation instead"
+        );
+    }
+    transcription_selection.language = language.clone();
     os::ensure_system_audio()?;
     let created_at_ms = now_ms();
     let id = format!("{created_at_ms}-{}", std::process::id());
@@ -479,6 +506,8 @@ pub fn record(
         notes_error: None,
         calendar: start.calendar,
         title_source: None,
+        language: Some(language),
+        language_pinned,
         chapters: Vec::new(),
         chapters_refined: false,
         retention_applies: true,
@@ -978,12 +1007,13 @@ pub fn finish_pending(id: &str) -> Result<Option<MeetingManifest>> {
     if !pending.exists() {
         return Ok(None);
     }
-    let (_, selection) = crate::app_settings::transcription_selection();
+    let (_, mut selection) = crate::app_settings::transcription_selection();
+    let manifest = read_manifest(&directory)?;
+    apply_manifest_language(&mut selection, manifest.language.as_deref());
     let model = crate::transcription::models::validate(&selection)?;
     if !crate::transcription::models::is_installed(model, &selection.language) {
         return Err(eyre!("{} is not installed", model.name));
     }
-    let manifest = read_manifest(&directory)?;
     tracing::info!(
         meeting = id,
         "finishing a meeting transcript left pending by an earlier quit"

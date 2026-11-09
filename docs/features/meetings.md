@@ -17,7 +17,7 @@ Labs > Meetings switch (macOS)                       // meetings.opt-in; off by 
 ├── Off -> only the Labs switch -> Turn on -> meetings.enabled = true
 ├── On -> Meetings joins the sidebar; header switch Recordings | Settings;
 │   menu-bar items, call detection, Option-Control-V
-│   Settings view: Call recording, After a meeting, Calendar, Detected calls, Advanced ▸
+│   Settings view: Call recording (+ Language with its lab), After a meeting, Calendar, Detected calls, Advanced ▸
 │   ├── System Audio Recording                  // meetings.permission; asked only now
 │   │   ├── Untrusted row shown / Allow -> retired Hex IDs cleared (`ScreenCapture` + `AudioCapture`)
 │   │   ├── Allow -> macOS prompt the first time (tour's permission_control)
@@ -100,8 +100,9 @@ Requires the selected local dictation model, Microphone, and System Audio
 Recording (the "System Audio Recording Only" list under Privacy & Security ›
 Screen & System Audio Recording; `NSAudioCaptureUsageDescription`). Screen
 Recording alone still works through the ScreenCaptureKit fallback. The opt-in is `meetings.enabled` in `settings.json`, alongside
-`meetings.show_recording_indicator` (default `true`) and
-`meetings.recording_indicator_corner` (default `top_right`)
+`meetings.show_recording_indicator` (default `true`),
+`meetings.recording_indicator_corner` (default `top_right`), and
+`meetings.language` (default unset: follow dictation)
 ([app_settings.rs](../../src/app_settings.rs) `MeetingSettings`). Recording
 refuses to start without either grant and asks macOS for System Audio Recording.
 
@@ -837,6 +838,18 @@ While recording                                      // meetings.rolling
      ├── No pause by 10 s -> hard cut; next chunk repeats its last 2 s
      │   (so a chunk is at most 12 s of audio)
      └── Silent chunk (no 20 ms frame ≥ -60 dB) -> skipped, no inference
+  -> Language (Labs › Meeting language, off by default) // meetings.language
+     ├── Same as dictation (default) -> the dictation language is snapshotted
+     │   when recording starts
+     ├── A fixed code -> every chunk runs with that hint when the loaded model
+     │   takes one per run (Cohere, Whisper, Qwen, SenseVoice...)
+     │   └── Parakeet v3, GigaAM, and Apple Speech cannot be pinned; the row
+     │       says so and meetings keep following dictation
+     ├── Labs › Import audio runs an imported file in the same language
+     └── The snapshot is stored as the manifest's `language` (and
+         `language_pinned` when it was the user's choice); the final pass and
+         any pending resume use the same one, even if Settings change. Apple
+         Speech finishes in the locale it is installed for
   -> Each chunk runs on dictation's loaded model, only while dictation is idle
      ├── No speech detected (Silero, once installed) -> empty transcript, no
      │   inference; coverage still advances
@@ -1052,6 +1065,12 @@ Sources: [meeting/transcript.rs](../../src/meeting/transcript.rs),
 `microphone_entries_wait_until_the_system_track_covers_them`, and
 `timed_words_become_sentences_at_punctuation_and_pauses` (synthetic signals).
 Other checks:
+`a_meeting_pins_the_language_only_on_a_model_that_takes_a_hint`,
+`a_pending_meeting_reuses_its_snapshotted_language`,
+`a_manifest_records_the_language_a_meeting_ran_in`,
+`a_meeting_language_needs_a_model_that_takes_it_per_run`,
+`meeting_language_is_a_known_code_or_none`,
+`meeting_language_is_optional_and_older_files_follow_dictation`,
 `continuous_speech_is_hard_cut_with_overlap_and_covers_every_sample`,
 `chunks_end_at_the_first_pause_after_the_target_length`,
 `short_recordings_become_one_chunk_and_silence_tails_are_dropped`,

@@ -555,6 +555,11 @@ const KEYS: &[Key] = &[
         "Labs: an exported meeting's Markdown follows its title once notes or a rename provide one, keeping the date and time",
     ),
     key(
+        "labs.meeting_language",
+        Kind::Bool,
+        "Labs: Meetings › Settings offers Language, so every meeting chunk runs in meetings.language on a model that takes a language hint",
+    ),
+    key(
         "labs.expire_meeting_audio",
         Kind::Bool,
         "Labs: finished meetings drop their WAVs on meetings.audio_retention while their transcripts, notes, summary, and Markdown stay",
@@ -588,6 +593,11 @@ const KEYS: &[Key] = &[
         "meetings.output_folder",
         Kind::Path,
         "Folder for meeting Markdown; none uses ~/Documents/Hex Meetings",
+    ),
+    optional(
+        "meetings.language",
+        Kind::Text,
+        "Language for meeting transcription, as an ISO code such as fr or en; none follows dictation (a model that takes a language hint is required)",
     ),
     key(
         "meetings.summaries",
@@ -810,6 +820,7 @@ const NEEDS: &[(&str, &str)] = &[
     ("labs.meeting_notes_vocabulary", "meetings"),
     ("labs.meeting_finished_event", "meetings"),
     ("labs.meeting_descriptive_filenames", "meetings"),
+    ("labs.meeting_language", "meetings"),
     ("labs.follow_live_transcript", "meetings"),
     ("experimental.hex_microphone", "fun"),
     ("typed_text_hotkey", "typed_text"),
@@ -1079,6 +1090,16 @@ pub fn apply(
                     .locks(crate::policy::Lock::OpenCodeProcessing) =>
         {
             return Err(managed(name, crate::policy::Lock::OpenCodeProcessing));
+        }
+        "meetings.language" => {
+            if let Some(language) = &candidate.meetings.language
+                && !crate::transcription::models::is_known_language(language)
+            {
+                return Err(invalid(
+                    name,
+                    "expected a language code such as fr or en, or none to follow dictation",
+                ));
+            }
         }
         "sound_effect_volume" => {
             let volume = candidate.sound_effect_volume;
@@ -1478,6 +1499,7 @@ mod tests {
                 retention: Some(crate::app_settings::MeetingRetention::Day),
                 audio_retention: Some(crate::app_settings::MeetingRetention::Day),
                 opencode_model: Some("anthropic/claude-haiku".into()),
+                language: Some("fr".into()),
                 ..Default::default()
             },
             ..Default::default()
@@ -2007,5 +2029,28 @@ mod tests {
         ] {
             assert!(apply_all(&settings, &values(refused), &rules()).is_err());
         }
+    }
+
+    #[test]
+    fn meeting_language_is_a_known_code_or_none() {
+        let settings = AppSettings::default();
+        assert_eq!(
+            get(&settings, "meetings.language").unwrap()[0].value,
+            Value::Null
+        );
+        let change = apply(&settings, "meetings.language", "fr", &rules()).unwrap();
+        assert_eq!(change.settings.meetings.language.as_deref(), Some("fr"));
+        assert_eq!(
+            get(&change.settings, "meetings.language").unwrap()[0].value,
+            Value::String("fr".into())
+        );
+        assert_eq!(
+            apply(&settings, "meetings.language", "klingon", &rules())
+                .unwrap_err()
+                .code,
+            "invalid-value"
+        );
+        let cleared = apply(&change.settings, "meetings.language", "none", &rules()).unwrap();
+        assert!(cleared.settings.meetings.language.is_none());
     }
 }

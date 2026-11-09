@@ -109,36 +109,54 @@ impl Transcriber {
 
     /// Transcribe one normalized segment with the same input preparation as
     /// plain dictation. The caller retains ownership of segment offsets.
-    pub fn transcribe_segments(&mut self, mut samples: Vec<f32>) -> Result<Transcript> {
+    pub fn transcribe_segments(&mut self, samples: Vec<f32>) -> Result<Transcript> {
+        self.transcribe_segments_with_language(samples, None)
+    }
+
+    /// One segment in `language`, when the loaded model takes a hint. A
+    /// meeting pins its language here so every chunk uses the same one.
+    pub fn transcribe_segments_with_language(
+        &mut self,
+        mut samples: Vec<f32>,
+        language: Option<&str>,
+    ) -> Result<Transcript> {
         match self {
             Self::Gguf(model) => {
                 prepare_gguf_samples(&mut samples, model.model_id());
                 model
-                    .transcribe_segments(&samples)
-                    .map(|result| Transcript {
-                        text: result.text,
-                        segments: result
-                            .segments
-                            .into_iter()
-                            .map(|segment| TranscriptSegment {
-                                start_ms: segment.t0_ms,
-                                end_ms: segment.t1_ms,
-                                text: segment.text,
-                            })
-                            .collect(),
-                        words: result
-                            .words
-                            .into_iter()
-                            .map(|word| TranscriptSegment {
-                                start_ms: word.t0_ms,
-                                end_ms: word.t1_ms,
-                                text: word.text,
-                            })
-                            .collect(),
-                    })
+                    .transcribe_segments_with_language(&samples, language)
+                    .map(gguf_transcript)
             }
+            // Apple Speech's locale belongs to the loaded transcriber; a
+            // meeting's pinned language cannot change it without another
+            // model. Meetings › Language says so when it is set.
             Self::AppleSpeech(model) => model.transcribe(&samples),
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn gguf_transcript(result: transcribe_cpp::Transcript) -> Transcript {
+    Transcript {
+        text: result.text,
+        segments: result
+            .segments
+            .into_iter()
+            .map(|segment| TranscriptSegment {
+                start_ms: segment.t0_ms,
+                end_ms: segment.t1_ms,
+                text: segment.text,
+            })
+            .collect(),
+        words: result
+            .words
+            .into_iter()
+            .map(|word| TranscriptSegment {
+                start_ms: word.t0_ms,
+                end_ms: word.t1_ms,
+                text: word.text,
+            })
+            .collect(),
     }
 }
 
